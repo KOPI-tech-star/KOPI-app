@@ -1,0 +1,6 @@
+{
+  "name": "KOPI",
+  "description": "Business-opportunity discovery platform. Turn everyday complaints into meaningful business ideas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
