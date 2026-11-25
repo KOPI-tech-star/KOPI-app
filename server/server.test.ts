@@ -82,7 +82,7 @@ test('sanitizePathForLog strips query parameters and control characters', () => 
   assert.equal(sanitizePathForLog('/api/test\n\r?x=1'), '/api/test');
 });
 
-test('GET /api/health returns HTTP 200 with honest process-health envelope and security headers', async () => {
+test('GET /api/health returns HTTP 200 with honest Firestore client vs server diagnostics and security headers', async () => {
   const env = parseEnv({ NODE_ENV: 'test' });
   const app = createApp({ env });
 
@@ -94,19 +94,60 @@ test('GET /api/health returns HTTP 200 with honest process-health envelope and s
     assert.equal(res.headers.get('access-control-allow-origin'), null);
     assert.ok(res.headers.get('x-request-id'));
 
-    const body = (await res.json()) as {
+    const rawText = await res.text();
+    assert.doesNotMatch(rawText, /apiKey|AIza|private_key/i);
+
+    const body = JSON.parse(rawText) as {
       data: {
         service: string;
         status: string;
         database: string;
+        firestore: {
+          provider: string;
+          projectId: string | null;
+          databaseId: string | null;
+          clientSdkAccess: string;
+          privilegedServerAccess: string;
+        };
         timestamp: string;
       };
     };
 
     assert.equal(body.data.service, 'kopi-api');
     assert.equal(body.data.status, 'running');
-    assert.equal(body.data.database, 'not_configured');
+    assert.equal(body.data.database, 'firestore_client_configured');
+    assert.equal(body.data.firestore.provider, 'firebase_firestore');
+    assert.equal(body.data.firestore.projectId, 'gen-lang-client-0653252950');
+    assert.equal(
+      body.data.firestore.databaseId,
+      'ai-studio-kopi-6863852d-35ae-4115-97d3-3fcc2fdd6372'
+    );
+    assert.equal(body.data.firestore.clientSdkAccess, 'restricted_demo_get_only');
+    assert.equal(body.data.firestore.privilegedServerAccess, 'unavailable');
     assert.ok(!Number.isNaN(Date.parse(body.data.timestamp)));
+  });
+
+  // Also verify unconfigured state when diagnostics report missing/invalid config
+  const unconfiguredApp = createApp({
+    env,
+    checkFirestoreDiagnostics: async () => ({
+      provider: 'firebase_firestore',
+      projectId: null,
+      databaseId: null,
+      clientSdkAccess: 'unconfigured',
+      privilegedServerAccess: 'unavailable',
+    }),
+  });
+
+  await withServer(unconfiguredApp, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/health`);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      data: { database: string; firestore: { clientSdkAccess: string; privilegedServerAccess: string } };
+    };
+    assert.equal(body.data.database, 'unconfigured');
+    assert.equal(body.data.firestore.clientSdkAccess, 'unconfigured');
+    assert.equal(body.data.firestore.privilegedServerAccess, 'unavailable');
   });
 });
 

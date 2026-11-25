@@ -8,7 +8,6 @@ import {
   X,
 } from 'lucide-react';
 import {
-  DEMO_OPPORTUNITIES,
   QUICK_EXPLORE_CATEGORIES,
   RADAR_ASSETS,
   RADAR_DASHBOARD_COPY,
@@ -20,6 +19,13 @@ import {
   type SidebarNavItem,
   type TrendingTopic,
 } from '../config/opportunityRadar';
+import { useDemoProblems } from '../hooks/useDemoProblems';
+import {
+  DatabaseErrorState,
+  DatabaseLoadingSkeleton,
+  DatabaseMissingCollectionState,
+  DevOfflineFixtureBanner,
+} from './DatabaseStateCard';
 import { HowItWorksModal } from './HowItWorksModal';
 import { KopiLogo } from './KopiLogo';
 import { OpportunityCardIllustration } from './OpportunityCardIllustration';
@@ -72,6 +78,16 @@ export function OpportunityRadarScreen({
   const { draftQuery, activeQuery, activeCategory, activeTopic, bookmarkedIds } =
     currentState;
 
+  const {
+    status: loadStatus,
+    opportunities,
+    missingIds,
+    errorCode,
+    errorMessage,
+    isDevOfflineFixture,
+    retry,
+  } = useDemoProblems();
+
   const updateRadarState = (
     updater: (prev: RadarSessionState) => RadarSessionState
   ) => {
@@ -82,7 +98,7 @@ export function OpportunityRadarScreen({
     }
   };
 
-  const visibleOpportunities = filterOpportunities(DEMO_OPPORTUNITIES, {
+  const visibleOpportunities = filterOpportunities(opportunities, {
     query: activeQuery,
     category: activeCategory,
     topic: activeTopic,
@@ -155,7 +171,7 @@ export function OpportunityRadarScreen({
     }
 
     if (item.id === 'saved') {
-      const savedTitles = DEMO_OPPORTUNITIES.filter((o) =>
+      const savedTitles = opportunities.filter((o) =>
         bookmarkedIds.includes(o.id)
       ).map((o) => o.title);
 
@@ -418,6 +434,8 @@ export function OpportunityRadarScreen({
               </button>
             </div>
 
+            {isDevOfflineFixture && <DevOfflineFixtureBanner />}
+
             {activeTopic && (
               <div className="mt-3 flex items-center gap-2 text-[0.8125rem] text-[#705848]">
                 <span>
@@ -438,7 +456,30 @@ export function OpportunityRadarScreen({
               </div>
             )}
 
-            {visibleOpportunities.length > 0 ? (
+            {loadStatus === 'success' && missingIds.length > 0 && (
+              <p
+                data-testid="partial-missing-docs-notice"
+                className="font-dm-sans mt-3 rounded-xl border border-[#402818]/12 bg-[#FFF9F3] px-3.5 py-2 text-[0.8125rem] text-[#705848]"
+              >
+                Some approved demonstration documents are not yet present in
+                Firestore ({missingIds.join(', ')}).
+              </p>
+            )}
+
+            {loadStatus === 'loading' ? (
+              <DatabaseLoadingSkeleton variant="radar" />
+            ) : loadStatus === 'error' ? (
+              <DatabaseErrorState
+                errorCode={errorCode}
+                errorMessage={errorMessage}
+                onRetry={retry}
+              />
+            ) : loadStatus === 'empty' ? (
+              <DatabaseMissingCollectionState
+                missingIds={missingIds}
+                onRetry={retry}
+              />
+            ) : visibleOpportunities.length > 0 ? (
               <div
                 data-testid="opportunities-grid"
                 className="mt-4 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3"

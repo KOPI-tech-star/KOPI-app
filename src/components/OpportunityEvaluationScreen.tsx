@@ -1,12 +1,18 @@
 import { useState } from 'react';
 import { ArrowLeft, Info, Menu } from 'lucide-react';
 import type { SidebarNavItem } from '../config/opportunityRadar';
-import { getProblemById, type Problem } from '../config/problemExplorer';
+import type { Problem } from '../config/problemExplorer';
 import {
   createEmptyEvaluation,
   getEvaluationReadiness,
   validateEvaluationClaims,
 } from '../config/opportunityEvaluation';
+import { useDemoProblem } from '../hooks/useDemoProblems';
+import {
+  DatabaseErrorState,
+  DatabaseLoadingSkeleton,
+  DevOfflineFixtureBanner,
+} from './DatabaseStateCard';
 import { EvaluationDimensionList } from './EvaluationDimensionList';
 import { EvaluationLimitationsSection } from './EvaluationLimitationsSection';
 import { EvaluationMissingState } from './EvaluationMissingState';
@@ -335,7 +341,14 @@ export function OpportunityEvaluationScreen({
   const [placeholderRoute, setPlaceholderRoute] =
     useState<RoutePlaceholderState | null>(null);
 
-  const problem = getProblemById(problemId);
+  const {
+    status: loadStatus,
+    problem,
+    errorCode,
+    errorMessage,
+    isDevOfflineFixture,
+    retry,
+  } = useDemoProblem(problemId);
 
   const handleSelectNavItem = (item: SidebarNavItem) => {
     if (item.id === 'home') {
@@ -455,7 +468,19 @@ export function OpportunityEvaluationScreen({
             </button>
           </nav>
 
-          {problem ? (
+          {isDevOfflineFixture && <DevOfflineFixtureBanner />}
+
+          {loadStatus === 'loading' ? (
+            <DatabaseLoadingSkeleton variant="dossier" />
+          ) : loadStatus === 'error' ? (
+            <DatabaseErrorState
+              errorCode={errorCode}
+              errorMessage={errorMessage}
+              onRetry={retry}
+              secondaryActionLabel="Return to Problem Explorer"
+              onSecondaryAction={onNavigateToExplorer}
+            />
+          ) : problem ? (
             renderEvaluationContent(problem, onBackToInvestigation)
           ) : (
             <EvaluationMissingState

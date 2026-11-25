@@ -1,0 +1,55 @@
+rules_version = '2';
+
+// CANDIDATE RULESET FOR MILESTONE F2 — NOT DEPLOYED AUTOMATICALLY.
+// Requires founder review and explicit deployment approval before replacing
+// the active default-deny ruleset in firestore.rules.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Public demonstration read-only scope: strictly limited to single-document
+    // `get` reads on the 3 explicitly approved illustrative demo IDs.
+    match /demoProblems/{problemId} {
+      allow get: if problemId in [
+        'wet-entrance-monsoons',
+        'student-nutrition-consistency',
+        'excessive-small-delivery-packaging'
+      ];
+
+      allow list, create, update, delete: if false;
+    }
+
+    // Internal research and future reserved collections remain strictly inaccessible
+    // to all browser/client SDK requests.
+    match /dataSources/{docId=**} {
+      allow read, write: if false;
+    }
+
+    match /sourceObservations/{docId=**} {
+      allow read, write: if false;
+    }
+
+    match /problemClusters/{docId=**} {
+      allow read, write: if false;
+    }
+
+    match /evidenceLinks/{docId=**} {
+      allow read, write: if false;
+    }
+
+    match /researchInsights/{docId=**} {
+      allow read, write: if false;
+    }
+
+    match /opportunityEvaluations/{docId=**} {
+      allow read, write: if false;
+    }
+
+    match /publishedProblems/{docId=**} {
+      allow read, write: if false;
+    }
+
+    // Default-deny catch-all for all other collections and nested paths.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

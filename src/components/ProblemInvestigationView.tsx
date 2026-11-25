@@ -4,7 +4,13 @@ import type {
   OpportunityIllustrationKey,
   SidebarNavItem,
 } from '../config/opportunityRadar';
-import { getProblemById, type Problem } from '../config/problemExplorer';
+import type { Problem } from '../config/problemExplorer';
+import { useDemoProblem } from '../hooks/useDemoProblems';
+import {
+  DatabaseErrorState,
+  DatabaseLoadingSkeleton,
+  DevOfflineFixtureBanner,
+} from './DatabaseStateCard';
 import { EvidenceSourcesList } from './EvidenceSourcesList';
 import { HowItWorksModal } from './HowItWorksModal';
 import { KopiLogo } from './KopiLogo';
@@ -450,7 +456,14 @@ export function ProblemInvestigationView({
   const [placeholderRoute, setPlaceholderRoute] =
     useState<RoutePlaceholderState | null>(null);
 
-  const problem = getProblemById(problemId);
+  const {
+    status: loadStatus,
+    problem,
+    errorCode,
+    errorMessage,
+    isDevOfflineFixture,
+    retry,
+  } = useDemoProblem(problemId);
 
   const handleSelectNavItem = (item: SidebarNavItem) => {
     if (item.id === 'home') {
@@ -566,7 +579,19 @@ export function ProblemInvestigationView({
             </button>
           </nav>
 
-          {problem ? (
+          {isDevOfflineFixture && <DevOfflineFixtureBanner />}
+
+          {loadStatus === 'loading' ? (
+            <DatabaseLoadingSkeleton variant="dossier" />
+          ) : loadStatus === 'error' ? (
+            <DatabaseErrorState
+              errorCode={errorCode}
+              errorMessage={errorMessage}
+              onRetry={retry}
+              secondaryActionLabel="Back to Problem Explorer"
+              onSecondaryAction={onBackToExplorer}
+            />
+          ) : problem ? (
             renderInvestigationBody(problem, handleEvaluateOpportunity)
           ) : (
             <ProblemNotFoundState

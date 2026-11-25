@@ -8,7 +8,6 @@ import express, {
   Router,
 } from 'express';
 import type { ServerEnv } from './config/env';
-import { checkDatabaseConnectivity } from './db/pool';
 import {
   createCentralErrorHandler,
   notFoundApiHandler,
@@ -18,14 +17,14 @@ import {
   createRequestLogger,
 } from './middleware/requestLogger';
 import { createHealthRouter } from './routes/health';
-import { AppError, type DatabaseHealthStatus } from './types/api';
+import { AppError, type FirestoreHealthDiagnostics } from './types/api';
 
 export interface CreateAppOptions {
   env: ServerEnv;
   distDir?: string;
   enableRequestLogging?: boolean;
   enableErrorLogging?: boolean;
-  checkDatabaseHealth?: () => Promise<DatabaseHealthStatus>;
+  checkFirestoreDiagnostics?: () => Promise<FirestoreHealthDiagnostics>;
   registerFrontendMiddleware?: (app: Express) => void;
   registerTestRoutes?: (apiRouter: Router) => void;
 }
@@ -121,7 +120,7 @@ export function createApp(options: CreateAppOptions): Express {
     distDir = path.resolve(process.cwd(), 'dist'),
     enableRequestLogging = env.nodeEnv !== 'test',
     enableErrorLogging = env.nodeEnv !== 'test',
-    checkDatabaseHealth = () => checkDatabaseConnectivity(env),
+    checkFirestoreDiagnostics,
     registerFrontendMiddleware,
     registerTestRoutes,
   } = options;
@@ -138,7 +137,7 @@ export function createApp(options: CreateAppOptions): Express {
   apiRouter.use(enforceJsonBodyMediaType);
   apiRouter.use(express.json({ limit: MAX_API_JSON_BODY_SIZE, strict: true }));
 
-  apiRouter.use('/health', createHealthRouter({ checkDatabaseHealth }));
+  apiRouter.use('/health', createHealthRouter({ checkFirestoreDiagnostics }));
 
   if (registerTestRoutes) {
     registerTestRoutes(apiRouter);

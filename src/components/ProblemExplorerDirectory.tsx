@@ -5,10 +5,16 @@ import type {
   SidebarNavItem,
 } from '../config/opportunityRadar';
 import {
-  PROBLEM_RECORDS,
   filterProblems,
   type Problem,
 } from '../config/problemExplorer';
+import { useDemoProblems } from '../hooks/useDemoProblems';
+import {
+  DatabaseErrorState,
+  DatabaseLoadingSkeleton,
+  DatabaseMissingCollectionState,
+  DevOfflineFixtureBanner,
+} from './DatabaseStateCard';
 import { ExplorerEmptyState } from './ExplorerEmptyState';
 import { ExplorerFilterChips } from './ExplorerFilterChips';
 import { ExplorerProblemCard } from './ExplorerProblemCard';
@@ -41,7 +47,17 @@ export function ProblemExplorerDirectory({
   const [placeholderRoute, setPlaceholderRoute] =
     useState<RoutePlaceholderState | null>(null);
 
-  const visibleProblems = filterProblems(PROBLEM_RECORDS, {
+  const {
+    status: loadStatus,
+    problems,
+    missingIds,
+    errorCode,
+    errorMessage,
+    isDevOfflineFixture,
+    retry,
+  } = useDemoProblems();
+
+  const visibleProblems = filterProblems(problems, {
     query: activeQuery,
     category: activeCategory,
   });
@@ -208,14 +224,42 @@ export function ProblemExplorerDirectory({
 
           {/* Directory Listing */}
           <section aria-label="Problem listing" className="mt-7">
+            {isDevOfflineFixture && <DevOfflineFixtureBanner />}
+
+            {loadStatus === 'success' && missingIds.length > 0 && (
+              <p
+                data-testid="partial-missing-docs-notice"
+                className="font-dm-sans mb-3 rounded-xl border border-[#402818]/12 bg-[#FFF9F3] px-3.5 py-2 text-[0.8125rem] text-[#705848]"
+              >
+                Some approved demonstration documents are not yet present in
+                Firestore ({missingIds.join(', ')}).
+              </p>
+            )}
+
             <div className="mb-3 flex items-center justify-between text-[0.8125rem] text-[#705848]">
               <span data-testid="explorer-results-count" className="font-dm-sans">
-                Showing {visibleProblems.length} of {PROBLEM_RECORDS.length}{' '}
-                illustrative problem{PROBLEM_RECORDS.length === 1 ? '' : 's'}
+                {loadStatus === 'loading'
+                  ? 'Loading demonstration problems...'
+                  : loadStatus === 'success'
+                    ? `Showing ${visibleProblems.length} of ${problems.length} illustrative problem${problems.length === 1 ? '' : 's'}`
+                    : '0 illustrative problems loaded'}
               </span>
             </div>
 
-            {visibleProblems.length > 0 ? (
+            {loadStatus === 'loading' ? (
+              <DatabaseLoadingSkeleton variant="directory" />
+            ) : loadStatus === 'error' ? (
+              <DatabaseErrorState
+                errorCode={errorCode}
+                errorMessage={errorMessage}
+                onRetry={retry}
+              />
+            ) : loadStatus === 'empty' ? (
+              <DatabaseMissingCollectionState
+                missingIds={missingIds}
+                onRetry={retry}
+              />
+            ) : visibleProblems.length > 0 ? (
               <div
                 data-testid="explorer-problem-list"
                 className="flex flex-col gap-4"

@@ -13,14 +13,22 @@ export interface ApiErrorResponse {
 }
 
 export type DatabaseHealthStatus =
-  | 'not_configured'
-  | 'connected'
-  | 'unavailable';
+  | 'firestore_client_configured'
+  | 'unconfigured';
+
+export interface FirestoreHealthDiagnostics {
+  provider: 'firebase_firestore';
+  projectId: string | null;
+  databaseId: string | null;
+  clientSdkAccess: 'restricted_demo_get_only' | 'unconfigured';
+  privilegedServerAccess: 'unavailable';
+}
 
 export interface HealthStatusData {
   service: 'kopi-api';
   status: 'running';
   database: DatabaseHealthStatus;
+  firestore: FirestoreHealthDiagnostics;
   timestamp: string;
 }
 

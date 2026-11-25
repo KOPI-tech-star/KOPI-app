@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+.checkpoints/
+.playwright-cli/
+.aistudio/

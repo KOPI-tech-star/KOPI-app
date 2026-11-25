@@ -2,7 +2,6 @@ import 'dotenv/config';
 import http from 'node:http';
 import { createApp } from './server/app';
 import { parseEnv } from './server/config/env';
-import { closeDatabasePool } from './server/db/pool';
 
 async function startServer(): Promise<void> {
   const env = parseEnv(process.env);
@@ -60,11 +59,7 @@ async function startServer(): Promise<void> {
       })
     );
     httpServer.close(() => {
-      void closeDatabasePool()
-        .catch(() => {})
-        .finally(() => {
-          process.exit(0);
-        });
+      process.exit(0);
     });
   };
 
