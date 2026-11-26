@@ -21,13 +21,17 @@ export const FIRESTORE_COLLECTION_NAMES = {
   opportunityEvaluations: 'opportunityEvaluations',
   publishedProblems: 'publishedProblems',
   demoProblems: 'demoProblems',
+  users: 'users',
 } as const;
 
 export type FirestoreCollectionName =
   (typeof FIRESTORE_COLLECTION_NAMES)[keyof typeof FIRESTORE_COLLECTION_NAMES];
 
 export const FIRESTORE_COLLECTION_VISIBILITY: Readonly<
-  Record<FirestoreCollectionName, 'internal_only' | 'reserved_public' | 'demo_read_only'>
+  Record<
+    FirestoreCollectionName,
+    'internal_only' | 'reserved_public' | 'demo_read_only' | 'user_private'
+  >
 > = {
   dataSources: 'internal_only',
   sourceObservations: 'internal_only',
@@ -37,7 +41,61 @@ export const FIRESTORE_COLLECTION_VISIBILITY: Readonly<
   opportunityEvaluations: 'internal_only',
   publishedProblems: 'reserved_public',
   demoProblems: 'demo_read_only',
+  users: 'user_private',
 } as const;
+
+export const LEGAL_DOCUMENT_VERSIONS = {
+  termsVersion: 'draft-2026-11-25-v1',
+  privacyPolicyVersion: 'draft-2026-11-25-v1',
+} as const;
+
+export type SavedOpportunitySourceScreen =
+  | 'opportunity-radar'
+  | 'problem-explorer'
+  | 'problem-investigation'
+  | 'opportunity-evaluation'
+  | 'guest-migration';
+
+export interface UserEligibilityRecord {
+  readonly isEighteenOrOlderDeclared: true;
+  readonly ageVerificationStatus: 'self_declared_unverified';
+  readonly declaredAt: string;
+}
+
+export interface UserConsentRecords {
+  readonly termsAccepted: true;
+  readonly termsVersion: string;
+  readonly termsAcceptedAt: string;
+  readonly privacyPolicyAccepted: true;
+  readonly privacyPolicyVersion: string;
+  readonly privacyAcceptedAt: string;
+}
+
+/**
+ * Minimal user profile stored in `users/{uid}`.
+ * Intentionally omits unnecessary PII (email, phone, photoURL, address).
+ * Self-declared 18+ eligibility is stored explicitly as `self_declared_unverified`.
+ */
+export interface UserProfileDocument {
+  readonly uid: string;
+  readonly displayName: string | null;
+  readonly eligibility: UserEligibilityRecord;
+  readonly consents: UserConsentRecords;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly schemaVersion: number;
+}
+
+/**
+ * Saved opportunity document stored at `users/{uid}/savedOpportunities/{problemId}`.
+ * Keyed by `problemId` to prevent duplicates.
+ */
+export interface SavedOpportunityDocument {
+  readonly problemId: ApprovedDemoProblemId;
+  readonly savedAt: string;
+  readonly sourceScreen: SavedOpportunitySourceScreen;
+  readonly schemaVersion: number;
+}
 
 export const APPROVED_DEMO_PROBLEM_IDS = [
   'wet-entrance-monsoons',

@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { ArrowLeft, ArrowRight, Info, Menu } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Bookmark, Info, Menu } from 'lucide-react';
 import type {
   OpportunityIllustrationKey,
   SidebarNavItem,
 } from '../config/opportunityRadar';
 import type { Problem } from '../config/problemExplorer';
+import { useAuthAndSaved } from '../contexts/AuthAndSavedContext';
 import { useDemoProblem } from '../hooks/useDemoProblems';
+import { AccountControls } from './AccountControls';
 import {
   DatabaseErrorState,
   DatabaseLoadingSkeleton,
@@ -27,6 +29,7 @@ interface ProblemInvestigationViewProps {
   onNavigateHome: () => void;
   onNavigateRadar: () => void;
   onBackToExplorer: () => void;
+  onNavigateToSaved?: () => void;
   onEvaluateProblem?: (problemId: string) => void;
 }
 
@@ -38,7 +41,12 @@ const PROBLEM_ILLUSTRATION_MAP: Record<string, OpportunityIllustrationKey> = {
 
 function renderInvestigationBody(
   problem: Problem,
-  onEvaluateOpportunity: (p: Problem) => void
+  onEvaluateOpportunity: (p: Problem) => void,
+  bookmarkState: {
+    isSaved: boolean;
+    isSaving: boolean;
+    onToggle: (p: Problem) => void;
+  }
 ) {
   const illustrationKey = PROBLEM_ILLUSTRATION_MAP[problem.id];
   const validEvidenceIds = new Set(problem.evidence.map((e) => e.id));
@@ -99,20 +107,48 @@ function renderInvestigationBody(
               {problem.summary}
             </p>
 
-            {problem.isIllustrativeDemo && (
-              <div
-                data-testid="investigation-demo-notice"
-                className="mt-4 inline-flex items-center gap-2 rounded-xl border border-[#402818]/14 bg-[#FAE8D7]/80 px-3.5 py-2 text-[0.8125rem] font-medium text-[#402818]"
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              {problem.isIllustrativeDemo && (
+                <div
+                  data-testid="investigation-demo-notice"
+                  className="inline-flex items-center gap-2 rounded-xl border border-[#402818]/14 bg-[#FAE8D7]/80 px-3.5 py-2 text-[0.8125rem] font-medium text-[#402818]"
+                >
+                  <Info
+                    size={15}
+                    strokeWidth={2}
+                    aria-hidden="true"
+                    className="shrink-0 text-[#C65A1B]"
+                  />
+                  <span>Illustrative problem — not verified research.</span>
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={bookmarkState.isSaving}
+                aria-pressed={bookmarkState.isSaved}
+                data-testid="investigation-bookmark-button"
+                aria-label={
+                  bookmarkState.isSaved
+                    ? `Remove bookmark for ${problem.title}`
+                    : `Save ${problem.title}`
+                }
+                onClick={() => bookmarkState.onToggle(problem)}
+                className={`font-dm-sans inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-4 py-2 text-[0.8125rem] font-semibold whitespace-nowrap transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818] disabled:opacity-50 ${
+                  bookmarkState.isSaved
+                    ? 'border-[#C65A1B]/45 bg-[#C65A1B]/12 text-[#C65A1B]'
+                    : 'border-[#402818]/16 bg-[#FFF9F3] text-[#402818] hover:bg-[#FAE8D7]'
+                }`}
               >
-                <Info
+                <Bookmark
                   size={15}
                   strokeWidth={2}
+                  fill={bookmarkState.isSaved ? 'currentColor' : 'none'}
                   aria-hidden="true"
-                  className="shrink-0 text-[#C65A1B]"
                 />
-                <span>Illustrative problem — not verified research.</span>
-              </div>
-            )}
+                <span>{bookmarkState.isSaved ? 'Saved' : 'Save'}</span>
+              </button>
+            </div>
           </div>
 
           {illustrationKey && (
@@ -449,12 +485,21 @@ export function ProblemInvestigationView({
   onNavigateHome,
   onNavigateRadar,
   onBackToExplorer,
+  onNavigateToSaved,
   onEvaluateProblem,
 }: ProblemInvestigationViewProps) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
   const [placeholderRoute, setPlaceholderRoute] =
     useState<RoutePlaceholderState | null>(null);
+
+  const {
+    savedCount,
+    savedError,
+    savingProblemIds,
+    isProblemSaved,
+    toggleBookmark,
+  } = useAuthAndSaved();
 
   const {
     status: loadStatus,
@@ -478,6 +523,11 @@ export function ProblemInvestigationView({
 
     if (item.id === 'problem-explorer') {
       onBackToExplorer();
+      return;
+    }
+
+    if (item.id === 'saved' && onNavigateToSaved) {
+      onNavigateToSaved();
       return;
     }
 
@@ -514,7 +564,7 @@ export function ProblemInvestigationView({
     >
       <RadarSidebar
         activeNavId="problem-explorer"
-        savedCount={0}
+        savedCount={savedCount}
         mobileOpen={mobileNavOpen}
         onCloseMobile={() => setMobileNavOpen(false)}
         onSelectNavItem={handleSelectNavItem}
@@ -529,7 +579,7 @@ export function ProblemInvestigationView({
 
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Mobile & Tablet Top Bar */}
-        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-[#402818]/10 bg-[#FFF2E5]/95 px-4 py-3 backdrop-blur-xs sm:px-6 lg:hidden">
+        <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-[#402818]/10 bg-[#FFF2E5]/95 px-4 py-2.5 backdrop-blur-xs sm:px-6 lg:hidden">
           <button
             type="button"
             onClick={onNavigateHome}
@@ -539,15 +589,18 @@ export function ProblemInvestigationView({
             <KopiLogo className="!h-[24px]" />
           </button>
 
-          <button
-            type="button"
-            onClick={() => setMobileNavOpen(true)}
-            aria-label="Open navigation menu"
-            aria-expanded={mobileNavOpen}
-            className="inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl border border-[#402818]/14 bg-[#FAE8D7] text-[#402818] transition-colors duration-150 hover:bg-[#F3DFCA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818]"
-          >
-            <Menu size={20} strokeWidth={2} aria-hidden="true" />
-          </button>
+          <div className="flex items-center gap-2">
+            <AccountControls variant="compact" />
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Open navigation menu"
+              aria-expanded={mobileNavOpen}
+              className="inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl border border-[#402818]/14 bg-[#FAE8D7] text-[#402818] transition-colors duration-150 hover:bg-[#F3DFCA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818]"
+            >
+              <Menu size={20} strokeWidth={2} aria-hidden="true" />
+            </button>
+          </div>
         </header>
 
         <main className="mx-auto w-full max-w-[900px] flex-1 px-4 pt-6 pb-14 sm:px-6 md:px-8 lg:px-10 lg:pt-9">
@@ -581,6 +634,15 @@ export function ProblemInvestigationView({
 
           {isDevOfflineFixture && <DevOfflineFixtureBanner />}
 
+          {savedError && (
+            <div
+              role="alert"
+              className="mb-4 rounded-xl border border-[#9E4310]/30 bg-[#FAE8D7] px-4 py-2.5 font-dm-sans text-[0.84375rem] text-[#7B2D0C]"
+            >
+              {savedError}
+            </div>
+          )}
+
           {loadStatus === 'loading' ? (
             <DatabaseLoadingSkeleton variant="dossier" />
           ) : loadStatus === 'error' ? (
@@ -592,7 +654,16 @@ export function ProblemInvestigationView({
               onSecondaryAction={onBackToExplorer}
             />
           ) : problem ? (
-            renderInvestigationBody(problem, handleEvaluateOpportunity)
+            renderInvestigationBody(problem, handleEvaluateOpportunity, {
+              isSaved: isProblemSaved(problem.id),
+              isSaving: savingProblemIds.includes(problem.id),
+              onToggle: (target) =>
+                void toggleBookmark({
+                  problemId: target.id,
+                  problemTitle: target.title,
+                  sourceScreen: 'problem-investigation',
+                }),
+            })
           ) : (
             <ProblemNotFoundState
               attemptedId={problemId}

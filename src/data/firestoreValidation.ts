@@ -26,7 +26,10 @@ import {
   type ProblemClusterDocument,
   type ProblemPublicationStatus,
   type ResearchInsightDocument,
+  type SavedOpportunityDocument,
+  type SavedOpportunitySourceScreen,
   type SourceObservationDocument,
+  type UserProfileDocument,
   type ValidatedProblemAdapter,
 } from './firestoreContracts';
 
@@ -859,5 +862,251 @@ export function adaptValidatedDemoProblem(
     problem: toProblemDomainModel(doc),
     opportunity: toOpportunityCardItem(doc),
     illustration: doc.illustration,
+  };
+}
+
+const ALLOWED_SAVED_SOURCE_SCREENS: readonly SavedOpportunitySourceScreen[] = [
+  'opportunity-radar',
+  'problem-explorer',
+  'problem-investigation',
+  'opportunity-evaluation',
+  'guest-migration',
+];
+
+const DISALLOWED_USER_PROFILE_PII_FIELDS = new Set([
+  'email',
+  'phone',
+  'phoneNumber',
+  'photoURL',
+  'address',
+  'role',
+  'isAdmin',
+]);
+
+export function sanitizeUserDisplayName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.replace(/\s+/g, ' ').trim();
+  if (!trimmed) return null;
+  const bounded = trimmed.slice(0, 120);
+  if (containsUnsafeHtmlOrScript(bounded)) {
+    return null;
+  }
+  return bounded;
+}
+
+/**
+ * Runtime validator for `users/{uid}` documents.
+ * Rejects unnecessary PII fields, unconfirmed 18+ eligibility, or missing consent timestamps/versions.
+ */
+export function validateUserProfileDocument(
+  expectedUid: string,
+  raw: unknown
+): ValidationOutcome<UserProfileDocument> {
+  const errors: string[] = [];
+
+  if (!isValidFirestoreDocId(expectedUid)) {
+    return {
+      ok: false,
+      value: null,
+      errors: [`User ID "${expectedUid}" is not a valid Firestore document ID.`],
+    };
+  }
+
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      value: null,
+      errors: ['User profile document must be a plain object.'],
+    };
+  }
+
+  for (const key of Object.keys(raw)) {
+    if (DISALLOWED_USER_PROFILE_PII_FIELDS.has(key)) {
+      errors.push(`User profile contains disallowed field "${key}".`);
+    }
+  }
+
+  const uid = readSafeString(raw, 'uid', 128, errors);
+  if (uid && uid !== expectedUid) {
+    errors.push(`User profile field "uid" (${uid}) does not match expected UID "${expectedUid}".`);
+  }
+
+  let displayName: string | null = null;
+  if (raw.displayName !== null && raw.displayName !== undefined) {
+    if (typeof raw.displayName !== 'string') {
+      errors.push('Field "displayName" must be a string or null.');
+    } else {
+      const trimmed = raw.displayName.trim();
+      if (trimmed.length > 120) {
+        errors.push('Field "displayName" exceeds maximum length of 120.');
+      } else if (trimmed.length > 0 && containsUnsafeHtmlOrScript(trimmed)) {
+        errors.push('Field "displayName" contains disallowed HTML or script content.');
+      } else {
+        displayName = trimmed.length > 0 ? trimmed : null;
+      }
+    }
+  }
+
+  const eligibilityRaw = raw.eligibility;
+  let declaredAt: string | null = null;
+  if (!isPlainObject(eligibilityRaw)) {
+    errors.push('Field "eligibility" must be an object.');
+  } else {
+    if (eligibilityRaw.isEighteenOrOlderDeclared !== true) {
+      errors.push('Field "eligibility.isEighteenOrOlderDeclared" must be true.');
+    }
+    if (eligibilityRaw.ageVerificationStatus !== 'self_declared_unverified') {
+      errors.push(
+        'Field "eligibility.ageVerificationStatus" must be "self_declared_unverified".'
+      );
+    }
+    declaredAt = parseValidIsoTimestamp(eligibilityRaw.declaredAt);
+    if (!declaredAt) {
+      errors.push('Field "eligibility.declaredAt" must be a valid timestamp.');
+    }
+  }
+
+  const consentsRaw = raw.consents;
+  let termsVersion: string | null = null;
+  let termsAcceptedAt: string | null = null;
+  let privacyPolicyVersion: string | null = null;
+  let privacyAcceptedAt: string | null = null;
+
+  if (!isPlainObject(consentsRaw)) {
+    errors.push('Field "consents" must be an object.');
+  } else {
+    if (consentsRaw.termsAccepted !== true) {
+      errors.push('Field "consents.termsAccepted" must be true.');
+    }
+    termsVersion = readSafeString(consentsRaw, 'termsVersion', 64, errors);
+    termsAcceptedAt = parseValidIsoTimestamp(consentsRaw.termsAcceptedAt);
+    if (!termsAcceptedAt) {
+      errors.push('Field "consents.termsAcceptedAt" must be a valid timestamp.');
+    }
+
+    if (consentsRaw.privacyPolicyAccepted !== true) {
+      errors.push('Field "consents.privacyPolicyAccepted" must be true.');
+    }
+    privacyPolicyVersion = readSafeString(
+      consentsRaw,
+      'privacyPolicyVersion',
+      64,
+      errors
+    );
+    privacyAcceptedAt = parseValidIsoTimestamp(consentsRaw.privacyAcceptedAt);
+    if (!privacyAcceptedAt) {
+      errors.push('Field "consents.privacyAcceptedAt" must be a valid timestamp.');
+    }
+  }
+
+  const createdAt = parseValidIsoTimestamp(raw.createdAt);
+  const updatedAt = parseValidIsoTimestamp(raw.updatedAt);
+  if (!createdAt) errors.push('Field "createdAt" must be a valid timestamp.');
+  if (!updatedAt) errors.push('Field "updatedAt" must be a valid timestamp.');
+
+  if (
+    typeof raw.schemaVersion !== 'number' ||
+    !Number.isInteger(raw.schemaVersion) ||
+    raw.schemaVersion < 1
+  ) {
+    errors.push('Field "schemaVersion" must be a positive integer.');
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, value: null, errors };
+  }
+
+  return {
+    ok: true,
+    value: {
+      uid: uid!,
+      displayName,
+      eligibility: {
+        isEighteenOrOlderDeclared: true,
+        ageVerificationStatus: 'self_declared_unverified',
+        declaredAt: declaredAt!,
+      },
+      consents: {
+        termsAccepted: true,
+        termsVersion: termsVersion!,
+        termsAcceptedAt: termsAcceptedAt!,
+        privacyPolicyAccepted: true,
+        privacyPolicyVersion: privacyPolicyVersion!,
+        privacyAcceptedAt: privacyAcceptedAt!,
+      },
+      createdAt: createdAt!,
+      updatedAt: updatedAt!,
+      schemaVersion: raw.schemaVersion as number,
+    },
+    errors: [],
+  };
+}
+
+/**
+ * Runtime validator for `users/{uid}/savedOpportunities/{problemId}` documents.
+ */
+export function validateSavedOpportunityDocument(
+  expectedProblemId: string,
+  raw: unknown
+): ValidationOutcome<SavedOpportunityDocument> {
+  const errors: string[] = [];
+
+  if (!isValidFirestoreDocId(expectedProblemId) || !isApprovedDemoProblemId(expectedProblemId)) {
+    return {
+      ok: false,
+      value: null,
+      errors: [`Saved problemId "${expectedProblemId}" is not an approved problem ID.`],
+    };
+  }
+
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      value: null,
+      errors: ['Saved opportunity document must be a plain object.'],
+    };
+  }
+
+  const problemId = readSafeString(raw, 'problemId', 128, errors);
+  if (problemId && problemId !== expectedProblemId) {
+    errors.push(
+      `Saved document field "problemId" (${problemId}) does not match document ID "${expectedProblemId}".`
+    );
+  }
+
+  const savedAt = parseValidIsoTimestamp(raw.savedAt);
+  if (!savedAt) {
+    errors.push('Field "savedAt" must be a valid timestamp.');
+  }
+
+  const sourceScreen = raw.sourceScreen;
+  if (
+    typeof sourceScreen !== 'string' ||
+    !(ALLOWED_SAVED_SOURCE_SCREENS as readonly string[]).includes(sourceScreen)
+  ) {
+    errors.push('Invalid "sourceScreen" on saved opportunity document.');
+  }
+
+  if (
+    typeof raw.schemaVersion !== 'number' ||
+    !Number.isInteger(raw.schemaVersion) ||
+    raw.schemaVersion < 1
+  ) {
+    errors.push('Field "schemaVersion" must be a positive integer.');
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, value: null, errors };
+  }
+
+  return {
+    ok: true,
+    value: {
+      problemId: expectedProblemId,
+      savedAt: savedAt!,
+      sourceScreen: sourceScreen as SavedOpportunitySourceScreen,
+      schemaVersion: raw.schemaVersion as number,
+    },
+    errors: [],
   };
 }

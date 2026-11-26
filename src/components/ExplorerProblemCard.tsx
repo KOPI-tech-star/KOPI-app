@@ -1,4 +1,4 @@
-import { ArrowRight, FileQuestion } from 'lucide-react';
+import { ArrowRight, Bookmark, FileQuestion } from 'lucide-react';
 import type { OpportunityIllustrationKey } from '../config/opportunityRadar';
 import type { Problem } from '../config/problemExplorer';
 import { OpportunityCardIllustration } from './OpportunityCardIllustration';
@@ -6,6 +6,9 @@ import { OpportunityCardIllustration } from './OpportunityCardIllustration';
 interface ExplorerProblemCardProps {
   problem: Problem;
   onInvestigate: (problem: Problem) => void;
+  isSaved?: boolean;
+  isSaving?: boolean;
+  onToggleBookmark?: (problem: Problem) => void;
 }
 
 const PROBLEM_ILLUSTRATION_MAP: Record<string, OpportunityIllustrationKey> = {
@@ -17,6 +20,9 @@ const PROBLEM_ILLUSTRATION_MAP: Record<string, OpportunityIllustrationKey> = {
 export function ExplorerProblemCard({
   problem,
   onInvestigate,
+  isSaved = false,
+  isSaving = false,
+  onToggleBookmark,
 }: ExplorerProblemCardProps) {
   const illustrationKey = PROBLEM_ILLUSTRATION_MAP[problem.id];
   const hasEvidence = problem.evidence.length > 0;
@@ -40,14 +46,43 @@ export function ExplorerProblemCard({
       {/* Main editorial problem brief */}
       <div className="flex min-w-0 flex-1 flex-col justify-between gap-3">
         <div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="font-dm-sans text-[0.75rem] font-semibold tracking-[0.06em] uppercase text-[#705848]">
-              {problem.categories.join(' · ')}
-            </span>
-            {problem.isIllustrativeDemo && (
-              <span className="font-dm-sans text-[0.75rem] font-medium text-[#806957]">
-                · Illustrative example
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="font-dm-sans text-[0.75rem] font-semibold tracking-[0.06em] uppercase text-[#705848]">
+                {problem.categories.join(' · ')}
               </span>
+              {problem.isIllustrativeDemo && (
+                <span className="font-dm-sans text-[0.75rem] font-medium text-[#806957]">
+                  · Illustrative example
+                </span>
+              )}
+            </div>
+
+            {onToggleBookmark && (
+              <button
+                type="button"
+                disabled={isSaving}
+                aria-pressed={isSaved}
+                aria-label={
+                  isSaved
+                    ? `Remove bookmark for ${problem.title}`
+                    : `Bookmark ${problem.title}`
+                }
+                data-testid={`explorer-bookmark-button-${problem.id}`}
+                onClick={() => onToggleBookmark(problem)}
+                className={`inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818] disabled:opacity-50 ${
+                  isSaved
+                    ? 'border-[#C65A1B]/40 bg-[#C65A1B]/12 text-[#C65A1B]'
+                    : 'border-[#402818]/12 bg-[#FFF2E5] text-[#705848] hover:text-[#402818]'
+                }`}
+              >
+                <Bookmark
+                  size={16}
+                  strokeWidth={2}
+                  fill={isSaved ? 'currentColor' : 'none'}
+                  aria-hidden="true"
+                />
+              </button>
             )}
           </div>
 

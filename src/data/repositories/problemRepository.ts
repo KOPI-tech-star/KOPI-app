@@ -7,6 +7,7 @@ import type { Problem } from '../../config/problemExplorer';
 export type RepositoryErrorCode =
   | 'not_found'
   | 'permission_denied'
+  | 'unauthenticated'
   | 'unavailable'
   | 'invalid_record'
   | 'invalid_id'

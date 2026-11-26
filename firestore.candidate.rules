@@ -1,12 +1,175 @@
 rules_version = '2';
 
-// CANDIDATE RULESET FOR MILESTONE F2 — NOT DEPLOYED AUTOMATICALLY.
-// Requires founder review and explicit deployment approval before replacing
-// the active default-deny ruleset in firestore.rules.
+// CANDIDATE RULESET FOR PROMPT #27 (Auth, User Accounts & Saved Opportunities)
+// NOT DEPLOYED AUTOMATICALLY.
+// Preserves Milestone F2 read-only restrictions on `demoProblems` and denies all
+// internal/reserved collections while adding owner-isolated rules for `users/{userId}`
+// and `users/{userId}/savedOpportunities/{problemId}`.
+// Requires executable rules verification (Firebase Emulator) or explicit founder
+// approval before replacing `firestore.rules`.
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Public demonstration read-only scope: strictly limited to single-document
-    // `get` reads on the 3 explicitly approved illustrative demo IDs.
+
+    // =========================================================================
+    // Helper Functions
+    // =========================================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isAuthenticated()
+        && request.auth.uid == userId
+        && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string
+        && id.size() > 0
+        && id.size() <= 128
+        && id.matches('^[a-zA-Z0-9_-]+$');
+    }
+
+    function isApprovedProblemId(problemId) {
+      return problemId in [
+        'wet-entrance-monsoons',
+        'student-nutrition-consistency',
+        'excessive-small-delivery-packaging'
+      ] || exists(/databases/$(database)/documents/publishedProblems/$(problemId));
+    }
+
+    function isValidDisplayName(value) {
+      return value == null
+        || (value is string && value.trim().size() > 0 && value.size() <= 120);
+    }
+
+    function isValidEligibility(eligibility, requireServerTime) {
+      return eligibility is map
+        && eligibility.keys().hasAll([
+          'isEighteenOrOlderDeclared',
+          'ageVerificationStatus',
+          'declaredAt'
+        ])
+        && eligibility.keys().hasOnly([
+          'isEighteenOrOlderDeclared',
+          'ageVerificationStatus',
+          'declaredAt'
+        ])
+        && eligibility.isEighteenOrOlderDeclared == true
+        && eligibility.ageVerificationStatus == 'self_declared_unverified'
+        && eligibility.declaredAt is timestamp
+        && (!requireServerTime || eligibility.declaredAt == request.time);
+    }
+
+    function isValidConsents(consents, requireServerTime) {
+      return consents is map
+        && consents.keys().hasAll([
+          'termsAccepted',
+          'termsVersion',
+          'termsAcceptedAt',
+          'privacyPolicyAccepted',
+          'privacyPolicyVersion',
+          'privacyAcceptedAt'
+        ])
+        && consents.keys().hasOnly([
+          'termsAccepted',
+          'termsVersion',
+          'termsAcceptedAt',
+          'privacyPolicyAccepted',
+          'privacyPolicyVersion',
+          'privacyAcceptedAt'
+        ])
+        && consents.termsAccepted == true
+        && consents.termsVersion is string
+        && consents.termsVersion.size() > 0
+        && consents.termsVersion.size() <= 64
+        && consents.termsAcceptedAt is timestamp
+        && (!requireServerTime || consents.termsAcceptedAt == request.time)
+        && consents.privacyPolicyAccepted == true
+        && consents.privacyPolicyVersion is string
+        && consents.privacyPolicyVersion.size() > 0
+        && consents.privacyPolicyVersion.size() <= 64
+        && consents.privacyAcceptedAt is timestamp
+        && (!requireServerTime || consents.privacyAcceptedAt == request.time);
+    }
+
+    function hasCompletedOnboardingProfile(userId) {
+      let profilePath = /databases/$(database)/documents/users/$(userId);
+      return exists(profilePath)
+        && get(profilePath).data.uid == userId
+        && get(profilePath).data.eligibility.isEighteenOrOlderDeclared == true
+        && get(profilePath).data.eligibility.ageVerificationStatus == 'self_declared_unverified'
+        && get(profilePath).data.consents.termsAccepted == true
+        && get(profilePath).data.consents.privacyPolicyAccepted == true;
+    }
+
+    function isValidUserProfilePayload(userId, isCreate) {
+      let data = request.resource.data;
+      return data.keys().hasAll([
+          'uid',
+          'displayName',
+          'eligibility',
+          'consents',
+          'createdAt',
+          'updatedAt',
+          'schemaVersion'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'displayName',
+          'eligibility',
+          'consents',
+          'createdAt',
+          'updatedAt',
+          'schemaVersion'
+        ])
+        && data.uid == userId
+        && isValidId(data.uid)
+        && isValidDisplayName(data.displayName)
+        && isValidEligibility(data.eligibility, isCreate)
+        && isValidConsents(data.consents, isCreate)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.updatedAt == request.time
+        && data.schemaVersion is int
+        && data.schemaVersion == 1;
+    }
+
+    function isValidSavedOpportunityPayload(problemId) {
+      let data = request.resource.data;
+      return data.keys().hasAll([
+          'problemId',
+          'savedAt',
+          'sourceScreen',
+          'schemaVersion'
+        ])
+        && data.keys().hasOnly([
+          'problemId',
+          'savedAt',
+          'sourceScreen',
+          'schemaVersion'
+        ])
+        && isValidId(problemId)
+        && data.problemId == problemId
+        && data.savedAt is timestamp
+        && data.savedAt == request.time
+        && data.sourceScreen is string
+        && data.sourceScreen in [
+          'opportunity-radar',
+          'problem-explorer',
+          'problem-investigation',
+          'opportunity-evaluation',
+          'guest-migration'
+        ]
+        && data.schemaVersion is int
+        && data.schemaVersion == 1
+        && isApprovedProblemId(problemId);
+    }
+
+    // =========================================================================
+    // Public Demonstration Read-Only Scope (Milestone F2 Preserved)
+    // =========================================================================
     match /demoProblems/{problemId} {
       allow get: if problemId in [
         'wet-entrance-monsoons',
@@ -17,8 +180,55 @@ service cloud.firestore {
       allow list, create, update, delete: if false;
     }
 
-    // Internal research and future reserved collections remain strictly inaccessible
-    // to all browser/client SDK requests.
+    // =========================================================================
+    // User-Private Account & Persistent Saved Opportunities Scope (Prompt #27)
+    // =========================================================================
+    match /users/{userId} {
+      allow get: if isVerifiedOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfilePayload(userId, true)
+        && request.resource.data.createdAt == request.time;
+
+      allow update: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfilePayload(userId, false)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName',
+          'consents',
+          'updatedAt'
+        ])
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.eligibility == resource.data.eligibility
+        && (
+          request.resource.data.consents == resource.data.consents
+          || isValidConsents(request.resource.data.consents, true)
+        );
+
+      allow delete: if false;
+
+      match /savedOpportunities/{problemId} {
+        allow get, list: if isVerifiedOwner(userId) && isValidId(userId);
+
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidSavedOpportunityPayload(problemId)
+          && hasCompletedOnboardingProfile(userId);
+
+        allow update: if false;
+
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(problemId);
+      }
+    }
+
+    // =========================================================================
+    // Internal Research & Reserved Collections (Strictly Denied)
+    // =========================================================================
     match /dataSources/{docId=**} {
       allow read, write: if false;
     }

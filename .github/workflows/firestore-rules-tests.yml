@@ -1,0 +1,58 @@
+name: Firestore Security Rules Verification
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'firestore.candidate.rules'
+      - 'firestore.rules'
+      - 'firestore.rules.test.ts'
+      - 'firebase.emulator.json'
+      - 'eslint.config.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/firestore-rules-tests.yml'
+  pull_request:
+    paths:
+      - 'firestore.candidate.rules'
+      - 'firestore.rules'
+      - 'firestore.rules.test.ts'
+      - 'firebase.emulator.json'
+      - 'eslint.config.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/firestore-rules-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  firestore-rules-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Set up OpenJDK 21 for Firebase Emulator
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run TypeScript check and application unit tests
+        run: npm run lint && npm test
+
+      - name: Lint Firestore Security Rules
+        run: npx eslint firestore.candidate.rules firestore.rules
+
+      - name: Run Candidate Rules Suite in Isolated Firebase Emulator
+        run: npx --yes firebase-tools emulators:exec --project demo-kopi-rules-test --config firebase.emulator.json --only firestore "npx tsx --test firestore.rules.test.ts"
+

@@ -56,6 +56,10 @@ test('normalizeRoute resolves Welcome, Opportunity Radar, Problem Explorer direc
     normalizeRoute('/opportunity-evaluation/wet-entrance-monsoons/'),
     '/opportunity-evaluation/wet-entrance-monsoons'
   );
+
+  assert.equal(normalizeRoute('/saved'), '/saved');
+  assert.equal(normalizeRoute('/saved/'), '/saved');
+  assert.equal(normalizeRoute('/saved-opportunities'), '/saved');
 });
 
 test('parseProblemDetailId decodes valid IDs and safely handles malformed or nested paths without throwing', () => {

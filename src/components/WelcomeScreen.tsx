@@ -8,6 +8,7 @@ import {
 } from '../config/firstScreen';
 import { SCROLL_TRACK_SVH } from '../config/scrollTimeline';
 import { useScrollStory } from '../hooks/useScrollStory';
+import { useAuthAndSaved } from '../contexts/AuthAndSavedContext';
 import { HeroBackground } from './HeroBackground';
 import { Header } from './Header';
 import {
@@ -23,6 +24,7 @@ export function WelcomeScreen({ onNavigateToRadar }: WelcomeScreenProps) {
   const [activeRoute, setActiveRoute] = useState<RoutePlaceholderState | null>(null);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const { trackRef, stageRef } = useScrollStory();
+  const { authStatus, profileStatus, openSignInModal } = useAuthAndSaved();
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -47,6 +49,18 @@ export function WelcomeScreen({ onNavigateToRadar }: WelcomeScreenProps) {
 
     if (item.id === 'explore' && onNavigateToRadar) {
       onNavigateToRadar();
+      return;
+    }
+
+    if (item.id === 'sign-in') {
+      if (authStatus === 'signed_in' && profileStatus === 'ready' && onNavigateToRadar) {
+        onNavigateToRadar();
+        return;
+      }
+      openSignInModal({
+        reason: authStatus === 'signed_in' ? 'onboarding_required' : 'account_button',
+        returnRoute: '/opportunity-radar',
+      });
       return;
     }
 

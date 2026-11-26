@@ -13,13 +13,14 @@ import {
   RADAR_DASHBOARD_COPY,
   TRENDING_TOPICS,
   filterOpportunities,
-  toggleBookmarkId,
   type OpportunityCardItem,
   type QuickExploreCategory,
   type SidebarNavItem,
   type TrendingTopic,
 } from '../config/opportunityRadar';
+import { useAuthAndSaved } from '../contexts/AuthAndSavedContext';
 import { useDemoProblems } from '../hooks/useDemoProblems';
+import { AccountControls } from './AccountControls';
 import {
   DatabaseErrorState,
   DatabaseLoadingSkeleton,
@@ -54,6 +55,7 @@ export const INITIAL_RADAR_SESSION_STATE: RadarSessionState = {
 interface OpportunityRadarScreenProps {
   onNavigateHome: () => void;
   onNavigateToExplorer?: () => void;
+  onNavigateToSaved?: () => void;
   onInvestigateOpportunity?: (problemId: string) => void;
   sessionState?: RadarSessionState;
   onSessionStateChange?: (nextState: RadarSessionState) => void;
@@ -62,6 +64,7 @@ interface OpportunityRadarScreenProps {
 export function OpportunityRadarScreen({
   onNavigateHome,
   onNavigateToExplorer,
+  onNavigateToSaved,
   onInvestigateOpportunity,
   sessionState,
   onSessionStateChange,
@@ -75,8 +78,15 @@ export function OpportunityRadarScreen({
     useState<RoutePlaceholderState | null>(null);
 
   const currentState = sessionState ?? localState;
-  const { draftQuery, activeQuery, activeCategory, activeTopic, bookmarkedIds } =
-    currentState;
+  const { draftQuery, activeQuery, activeCategory, activeTopic } = currentState;
+
+  const {
+    savedCount,
+    savedError,
+    savingProblemIds,
+    isProblemSaved,
+    toggleBookmark,
+  } = useAuthAndSaved();
 
   const {
     status: loadStatus,
@@ -136,10 +146,11 @@ export function OpportunityRadarScreen({
   };
 
   const handleToggleBookmark = (item: OpportunityCardItem) => {
-    updateRadarState((prev) => ({
-      ...prev,
-      bookmarkedIds: toggleBookmarkId(prev.bookmarkedIds, item.id),
-    }));
+    void toggleBookmark({
+      problemId: item.id,
+      problemTitle: item.title,
+      sourceScreen: 'opportunity-radar',
+    });
   };
 
   const handleToggleTopic = (topic: TrendingTopic) => {
@@ -165,25 +176,13 @@ export function OpportunityRadarScreen({
       return;
     }
 
-    if (item.id === 'how-it-works') {
-      setHowItWorksOpen(true);
+    if (item.id === 'saved' && onNavigateToSaved) {
+      onNavigateToSaved();
       return;
     }
 
-    if (item.id === 'saved') {
-      const savedTitles = opportunities.filter((o) =>
-        bookmarkedIds.includes(o.id)
-      ).map((o) => o.title);
-
-      const savedNote =
-        savedTitles.length > 0
-          ? ` Persistent saved collections are not yet connected. In this session you bookmarked (${savedTitles.length}): ${savedTitles.join('; ')}.`
-          : '';
-
-      setPlaceholderRoute({
-        title: item.placeholderTitle ?? item.label,
-        description: `${item.placeholderDescription ?? ''}${savedNote}`,
-      });
+    if (item.id === 'how-it-works') {
+      setHowItWorksOpen(true);
       return;
     }
 
@@ -207,7 +206,7 @@ export function OpportunityRadarScreen({
       {/* Left Navigation Sidebar (Persistent Desktop + Drawer Mobile/Tablet) */}
       <RadarSidebar
         activeNavId="opportunity-radar"
-        savedCount={bookmarkedIds.length}
+        savedCount={savedCount}
         mobileOpen={mobileNavOpen}
         onCloseMobile={() => setMobileNavOpen(false)}
         onSelectNavItem={handleSelectNavItem}
@@ -222,7 +221,7 @@ export function OpportunityRadarScreen({
       {/* Main Dashboard Workspace Column */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Compact Mobile & Tablet Top Bar (< 1024px) */}
-        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-[#402818]/10 bg-[#FFF2E5]/95 px-4 py-3 backdrop-blur-xs sm:px-6 lg:hidden">
+        <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-[#402818]/10 bg-[#FFF2E5]/95 px-4 py-2.5 backdrop-blur-xs sm:px-6 lg:hidden">
           <button
             type="button"
             onClick={onNavigateHome}
@@ -232,15 +231,18 @@ export function OpportunityRadarScreen({
             <KopiLogo className="!h-[24px]" />
           </button>
 
-          <button
-            type="button"
-            onClick={() => setMobileNavOpen(true)}
-            aria-label="Open navigation menu"
-            aria-expanded={mobileNavOpen}
-            className="inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl border border-[#402818]/14 bg-[#FAE8D7] text-[#402818] transition-colors duration-150 hover:bg-[#F3DFCA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818]"
-          >
-            <Menu size={20} strokeWidth={2} aria-hidden="true" />
-          </button>
+          <div className="flex items-center gap-2">
+            <AccountControls variant="compact" />
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Open navigation menu"
+              aria-expanded={mobileNavOpen}
+              className="inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl border border-[#402818]/14 bg-[#FAE8D7] text-[#402818] transition-colors duration-150 hover:bg-[#F3DFCA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818]"
+            >
+              <Menu size={20} strokeWidth={2} aria-hidden="true" />
+            </button>
+          </div>
         </header>
 
         <main className="mx-auto w-full max-w-[1100px] flex-1 px-4 pt-5 pb-12 sm:px-6 md:px-8 lg:px-10 lg:pt-8">
@@ -436,6 +438,15 @@ export function OpportunityRadarScreen({
 
             {isDevOfflineFixture && <DevOfflineFixtureBanner />}
 
+            {savedError && (
+              <div
+                role="alert"
+                className="mt-3 rounded-xl border border-[#9E4310]/30 bg-[#FAE8D7] px-4 py-2.5 font-dm-sans text-[0.84375rem] text-[#7B2D0C]"
+              >
+                {savedError}
+              </div>
+            )}
+
             {activeTopic && (
               <div className="mt-3 flex items-center gap-2 text-[0.8125rem] text-[#705848]">
                 <span>
@@ -485,7 +496,8 @@ export function OpportunityRadarScreen({
                 className="mt-4 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3"
               >
                 {visibleOpportunities.map((item) => {
-                  const isBookmarked = bookmarkedIds.includes(item.id);
+                  const isBookmarked = isProblemSaved(item.id);
+                  const isSaving = savingProblemIds.includes(item.id);
                   return (
                     <article
                       key={item.id}
@@ -501,17 +513,19 @@ export function OpportunityRadarScreen({
 
                           <button
                             type="button"
+                            disabled={isSaving}
                             aria-pressed={isBookmarked}
                             aria-label={
                               isBookmarked
                                 ? `Remove bookmark for ${item.title}`
                                 : `Bookmark ${item.title}`
                             }
+                            data-testid={`radar-bookmark-button-${item.id}`}
                             onClick={(event) => {
                               event.stopPropagation();
                               handleToggleBookmark(item);
                             }}
-                            className={`inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818] ${
+                            className={`inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818] disabled:opacity-50 ${
                               isBookmarked
                                 ? 'border-[#C65A1B]/40 bg-[#C65A1B]/12 text-[#C65A1B]'
                                 : 'border-[#402818]/12 bg-[#FFF2E5] text-[#705848] hover:text-[#402818]'

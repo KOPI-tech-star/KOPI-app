@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, Info, Menu } from 'lucide-react';
+import { ArrowLeft, Bookmark, Info, Menu } from 'lucide-react';
 import type { SidebarNavItem } from '../config/opportunityRadar';
 import type { Problem } from '../config/problemExplorer';
 import {
@@ -7,7 +7,9 @@ import {
   getEvaluationReadiness,
   validateEvaluationClaims,
 } from '../config/opportunityEvaluation';
+import { useAuthAndSaved } from '../contexts/AuthAndSavedContext';
 import { useDemoProblem } from '../hooks/useDemoProblems';
+import { AccountControls } from './AccountControls';
 import {
   DatabaseErrorState,
   DatabaseLoadingSkeleton,
@@ -30,6 +32,7 @@ interface OpportunityEvaluationScreenProps {
   onNavigateHome: () => void;
   onNavigateRadar: () => void;
   onNavigateToExplorer: () => void;
+  onNavigateToSaved?: () => void;
   onBackToInvestigation: (problemId: string) => void;
 }
 
@@ -43,7 +46,12 @@ const GENERAL_RESEARCH_CHECKLIST: readonly string[] = [
 
 function renderEvaluationContent(
   problem: Problem,
-  onBackToInvestigation: (id: string) => void
+  onBackToInvestigation: (id: string) => void,
+  bookmarkState: {
+    isSaved: boolean;
+    isSaving: boolean;
+    onToggle: (p: Problem) => void;
+  }
 ) {
   const readiness = getEvaluationReadiness(problem);
   const evaluation = createEmptyEvaluation(problem);
@@ -92,20 +100,48 @@ function renderEvaluationContent(
           <span className="font-newsreader font-semibold">{problem.title}</span>
         </p>
 
-        {problem.isIllustrativeDemo && (
-          <div
-            data-testid="evaluation-demo-notice"
-            className="mt-3.5 inline-flex items-center gap-2 rounded-xl border border-[#402818]/14 bg-[#FAE8D7]/80 px-3.5 py-2 text-[0.8125rem] font-medium text-[#402818]"
+        <div className="mt-3.5 flex flex-wrap items-center gap-3">
+          {problem.isIllustrativeDemo && (
+            <div
+              data-testid="evaluation-demo-notice"
+              className="inline-flex items-center gap-2 rounded-xl border border-[#402818]/14 bg-[#FAE8D7]/80 px-3.5 py-2 text-[0.8125rem] font-medium text-[#402818]"
+            >
+              <Info
+                size={15}
+                strokeWidth={2}
+                aria-hidden="true"
+                className="shrink-0 text-[#C65A1B]"
+              />
+              <span>Illustrative demonstration problem — not verified research.</span>
+            </div>
+          )}
+
+          <button
+            type="button"
+            disabled={bookmarkState.isSaving}
+            aria-pressed={bookmarkState.isSaved}
+            data-testid="evaluation-bookmark-button"
+            aria-label={
+              bookmarkState.isSaved
+                ? `Remove bookmark for ${problem.title}`
+                : `Save ${problem.title}`
+            }
+            onClick={() => bookmarkState.onToggle(problem)}
+            className={`font-dm-sans inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-4 py-2 text-[0.8125rem] font-semibold whitespace-nowrap transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818] disabled:opacity-50 ${
+              bookmarkState.isSaved
+                ? 'border-[#C65A1B]/45 bg-[#C65A1B]/12 text-[#C65A1B]'
+                : 'border-[#402818]/16 bg-[#FFF9F3] text-[#402818] hover:bg-[#FAE8D7]'
+            }`}
           >
-            <Info
+            <Bookmark
               size={15}
               strokeWidth={2}
+              fill={bookmarkState.isSaved ? 'currentColor' : 'none'}
               aria-hidden="true"
-              className="shrink-0 text-[#C65A1B]"
             />
-            <span>Illustrative demonstration problem — not verified research.</span>
-          </div>
-        )}
+            <span>{bookmarkState.isSaved ? 'Saved' : 'Save'}</span>
+          </button>
+        </div>
       </header>
 
       {/* 3. Selected Problem Summary */}
@@ -334,12 +370,21 @@ export function OpportunityEvaluationScreen({
   onNavigateHome,
   onNavigateRadar,
   onNavigateToExplorer,
+  onNavigateToSaved,
   onBackToInvestigation,
 }: OpportunityEvaluationScreenProps) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
   const [placeholderRoute, setPlaceholderRoute] =
     useState<RoutePlaceholderState | null>(null);
+
+  const {
+    savedCount,
+    savedError,
+    savingProblemIds,
+    isProblemSaved,
+    toggleBookmark,
+  } = useAuthAndSaved();
 
   const {
     status: loadStatus,
@@ -366,6 +411,11 @@ export function OpportunityEvaluationScreen({
       return;
     }
 
+    if (item.id === 'saved' && onNavigateToSaved) {
+      onNavigateToSaved();
+      return;
+    }
+
     if (item.id === 'how-it-works') {
       setHowItWorksOpen(true);
       return;
@@ -387,7 +437,7 @@ export function OpportunityEvaluationScreen({
     >
       <RadarSidebar
         activeNavId="problem-explorer"
-        savedCount={0}
+        savedCount={savedCount}
         mobileOpen={mobileNavOpen}
         onCloseMobile={() => setMobileNavOpen(false)}
         onSelectNavItem={handleSelectNavItem}
@@ -402,7 +452,7 @@ export function OpportunityEvaluationScreen({
 
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Compact Mobile & Tablet Top Bar (< 1024px) */}
-        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-[#402818]/10 bg-[#FFF2E5]/95 px-4 py-3 backdrop-blur-xs sm:px-6 lg:hidden">
+        <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-[#402818]/10 bg-[#FFF2E5]/95 px-4 py-2.5 backdrop-blur-xs sm:px-6 lg:hidden">
           <button
             type="button"
             onClick={onNavigateHome}
@@ -412,15 +462,18 @@ export function OpportunityEvaluationScreen({
             <KopiLogo className="!h-[24px]" />
           </button>
 
-          <button
-            type="button"
-            onClick={() => setMobileNavOpen(true)}
-            aria-label="Open navigation menu"
-            aria-expanded={mobileNavOpen}
-            className="inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl border border-[#402818]/14 bg-[#FAE8D7] text-[#402818] transition-colors duration-150 hover:bg-[#F3DFCA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818]"
-          >
-            <Menu size={20} strokeWidth={2} aria-hidden="true" />
-          </button>
+          <div className="flex items-center gap-2">
+            <AccountControls variant="compact" />
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Open navigation menu"
+              aria-expanded={mobileNavOpen}
+              className="inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl border border-[#402818]/14 bg-[#FAE8D7] text-[#402818] transition-colors duration-150 hover:bg-[#F3DFCA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818]"
+            >
+              <Menu size={20} strokeWidth={2} aria-hidden="true" />
+            </button>
+          </div>
         </header>
 
         <main className="mx-auto w-full max-w-[900px] flex-1 px-4 pt-6 pb-14 sm:px-6 md:px-8 lg:px-10 lg:pt-9">
@@ -470,6 +523,15 @@ export function OpportunityEvaluationScreen({
 
           {isDevOfflineFixture && <DevOfflineFixtureBanner />}
 
+          {savedError && (
+            <div
+              role="alert"
+              className="mb-4 rounded-xl border border-[#9E4310]/30 bg-[#FAE8D7] px-4 py-2.5 font-dm-sans text-[0.84375rem] text-[#7B2D0C]"
+            >
+              {savedError}
+            </div>
+          )}
+
           {loadStatus === 'loading' ? (
             <DatabaseLoadingSkeleton variant="dossier" />
           ) : loadStatus === 'error' ? (
@@ -481,7 +543,16 @@ export function OpportunityEvaluationScreen({
               onSecondaryAction={onNavigateToExplorer}
             />
           ) : problem ? (
-            renderEvaluationContent(problem, onBackToInvestigation)
+            renderEvaluationContent(problem, onBackToInvestigation, {
+              isSaved: isProblemSaved(problem.id),
+              isSaving: savingProblemIds.includes(problem.id),
+              onToggle: (target) =>
+                void toggleBookmark({
+                  problemId: target.id,
+                  problemTitle: target.title,
+                  sourceScreen: 'opportunity-evaluation',
+                }),
+            })
           ) : (
             <EvaluationMissingState
               attemptedId={problemId}

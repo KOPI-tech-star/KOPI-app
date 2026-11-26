@@ -108,9 +108,6 @@ export const SIDEBAR_NAV_ITEMS: readonly SidebarNavItem[] = [
     id: 'saved',
     label: 'Saved',
     section: 'primary',
-    placeholderTitle: 'Saved Opportunities',
-    placeholderDescription:
-      'Persistent saved collections require user accounts and backend storage, which are not yet connected. Bookmarks toggled here remain active for this session.',
   },
   {
     id: 'methodology',

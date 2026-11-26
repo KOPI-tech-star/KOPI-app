@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { createApp } from './app';
 import { parseEnv } from './config/env';
 import { asyncHandler } from './middleware/errors';
-import { sanitizePathForLog } from './middleware/requestLogger';
+import { sanitizePathForLog, shouldLogRequest } from './middleware/requestLogger';
 
 async function withServer(
   app: ReturnType<typeof createApp>,
@@ -80,6 +80,16 @@ test('sanitizePathForLog strips query parameters and control characters', () => 
     '/api/health'
   );
   assert.equal(sanitizePathForLog('/api/test\n\r?x=1'), '/api/test');
+});
+
+test('shouldLogRequest retains API and 4xx/5xx error requests while skipping noisy 2xx/3xx static Vite dev fetches', () => {
+  assert.equal(shouldLogRequest('/src/lib/firestoreErrors.ts', 304), false);
+  assert.equal(shouldLogRequest('/node_modules/.vite/deps/react.js', 200), false);
+  assert.equal(shouldLogRequest('/assets/kopi-logo.png', 200), false);
+  assert.equal(shouldLogRequest('/src/lib/firestoreErrors.ts', 404), true);
+  assert.equal(shouldLogRequest('/src/lib/firestoreErrors.ts', 500), true);
+  assert.equal(shouldLogRequest('/api/health', 200), true);
+  assert.equal(shouldLogRequest('/opportunity-radar', 200), true);
 });
 
 test('GET /api/health returns HTTP 200 with honest Firestore client vs server diagnostics and security headers', async () => {

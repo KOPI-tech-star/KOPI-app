@@ -8,7 +8,9 @@ import {
   filterProblems,
   type Problem,
 } from '../config/problemExplorer';
+import { useAuthAndSaved } from '../contexts/AuthAndSavedContext';
 import { useDemoProblems } from '../hooks/useDemoProblems';
+import { AccountControls } from './AccountControls';
 import {
   DatabaseErrorState,
   DatabaseLoadingSkeleton,
@@ -30,12 +32,14 @@ import {
 interface ProblemExplorerDirectoryProps {
   onNavigateHome: () => void;
   onNavigateRadar: () => void;
+  onNavigateToSaved?: () => void;
   onSelectProblem: (problemId: string) => void;
 }
 
 export function ProblemExplorerDirectory({
   onNavigateHome,
   onNavigateRadar,
+  onNavigateToSaved,
   onSelectProblem,
 }: ProblemExplorerDirectoryProps) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -46,6 +50,14 @@ export function ProblemExplorerDirectory({
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
   const [placeholderRoute, setPlaceholderRoute] =
     useState<RoutePlaceholderState | null>(null);
+
+  const {
+    savedCount,
+    savedError,
+    savingProblemIds,
+    isProblemSaved,
+    toggleBookmark,
+  } = useAuthAndSaved();
 
   const {
     status: loadStatus,
@@ -104,6 +116,11 @@ export function ProblemExplorerDirectory({
       return;
     }
 
+    if (item.id === 'saved' && onNavigateToSaved) {
+      onNavigateToSaved();
+      return;
+    }
+
     if (item.id === 'how-it-works') {
       setHowItWorksOpen(true);
       return;
@@ -125,7 +142,7 @@ export function ProblemExplorerDirectory({
       {/* Shared responsive left sidebar with Problem Explorer active */}
       <RadarSidebar
         activeNavId="problem-explorer"
-        savedCount={0}
+        savedCount={savedCount}
         mobileOpen={mobileNavOpen}
         onCloseMobile={() => setMobileNavOpen(false)}
         onSelectNavItem={handleSelectNavItem}
@@ -140,7 +157,7 @@ export function ProblemExplorerDirectory({
 
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Compact Mobile & Tablet Top Bar (< 1024px) */}
-        <header className="sticky top-0 z-30 flex items-center justify-between border-b border-[#402818]/10 bg-[#FFF2E5]/95 px-4 py-3 backdrop-blur-xs sm:px-6 lg:hidden">
+        <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-[#402818]/10 bg-[#FFF2E5]/95 px-4 py-2.5 backdrop-blur-xs sm:px-6 lg:hidden">
           <button
             type="button"
             onClick={onNavigateHome}
@@ -150,15 +167,18 @@ export function ProblemExplorerDirectory({
             <KopiLogo className="!h-[24px]" />
           </button>
 
-          <button
-            type="button"
-            onClick={() => setMobileNavOpen(true)}
-            aria-label="Open navigation menu"
-            aria-expanded={mobileNavOpen}
-            className="inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl border border-[#402818]/14 bg-[#FAE8D7] text-[#402818] transition-colors duration-150 hover:bg-[#F3DFCA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818]"
-          >
-            <Menu size={20} strokeWidth={2} aria-hidden="true" />
-          </button>
+          <div className="flex items-center gap-2">
+            <AccountControls variant="compact" />
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Open navigation menu"
+              aria-expanded={mobileNavOpen}
+              className="inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl border border-[#402818]/14 bg-[#FAE8D7] text-[#402818] transition-colors duration-150 hover:bg-[#F3DFCA] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818]"
+            >
+              <Menu size={20} strokeWidth={2} aria-hidden="true" />
+            </button>
+          </div>
         </header>
 
         <main className="mx-auto w-full max-w-[1040px] flex-1 px-4 pt-6 pb-14 sm:px-6 md:px-8 lg:px-10 lg:pt-10">
@@ -226,6 +246,15 @@ export function ProblemExplorerDirectory({
           <section aria-label="Problem listing" className="mt-7">
             {isDevOfflineFixture && <DevOfflineFixtureBanner />}
 
+            {savedError && (
+              <div
+                role="alert"
+                className="mb-3 rounded-xl border border-[#9E4310]/30 bg-[#FAE8D7] px-4 py-2.5 font-dm-sans text-[0.84375rem] text-[#7B2D0C]"
+              >
+                {savedError}
+              </div>
+            )}
+
             {loadStatus === 'success' && missingIds.length > 0 && (
               <p
                 data-testid="partial-missing-docs-notice"
@@ -269,6 +298,15 @@ export function ProblemExplorerDirectory({
                     key={problem.id}
                     problem={problem}
                     onInvestigate={handleInvestigateProblem}
+                    isSaved={isProblemSaved(problem.id)}
+                    isSaving={savingProblemIds.includes(problem.id)}
+                    onToggleBookmark={(target) =>
+                      void toggleBookmark({
+                        problemId: target.id,
+                        problemTitle: target.title,
+                        sourceScreen: 'problem-explorer',
+                      })
+                    }
                   />
                 ))}
               </div>

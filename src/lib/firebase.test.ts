@@ -197,7 +197,7 @@ test('7 & 8. Firebase initialization triggers zero Firestore operations and zero
   }
 });
 
-test('9. Deployed Milestone F2 Firestore Security Rules enforce narrow get-only demo access and blueprint remains unchanged', () => {
+test('9. Deployed Milestone F2 Firestore Security Rules enforce narrow get-only demo access and blueprint matches Prompt #27 schema', () => {
   const rules = fs.readFileSync(path.join(ROOT_DIR, 'firestore.rules'), 'utf8');
   assert.match(rules, /rules_version\s*=\s*'2'/);
   assert.match(rules, /match\s+\/demoProblems\/\{problemId\}/);
@@ -209,6 +209,26 @@ test('9. Deployed Milestone F2 Firestore Security Rules enforce narrow get-only 
 
   const blueprint = JSON.parse(
     fs.readFileSync(path.join(ROOT_DIR, 'firebase-blueprint.json'), 'utf8')
-  ) as { entities: Record<string, unknown>; firestore: Record<string, unknown> };
-  assert.deepEqual(blueprint, { entities: {}, firestore: {} });
+  ) as {
+    entities: Record<string, { required?: string[] }>;
+    firestore: Record<string, { schema?: string }>;
+  };
+
+  assert.deepEqual(Object.keys(blueprint.entities).sort(), [
+    'DemoProblem',
+    'SavedOpportunity',
+    'UserProfile',
+  ]);
+  assert.deepEqual(Object.keys(blueprint.firestore).sort(), [
+    '/demoProblems/{problemId}',
+    '/users/{userId}',
+    '/users/{userId}/savedOpportunities/{problemId}',
+  ]);
+  assert.equal(blueprint.firestore['/demoProblems/{problemId}']?.schema, 'DemoProblem');
+  assert.equal(blueprint.firestore['/users/{userId}']?.schema, 'UserProfile');
+  assert.equal(
+    blueprint.firestore['/users/{userId}/savedOpportunities/{problemId}']?.schema,
+    'SavedOpportunity'
+  );
+  assert.ok(!('publishedProblems' in blueprint.firestore));
 });

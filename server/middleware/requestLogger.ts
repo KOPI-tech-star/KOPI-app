@@ -34,6 +34,21 @@ export function attachRequestId(
   next();
 }
 
+const STATIC_ASSET_PREFIXES = [
+  '/src/',
+  '/node_modules/',
+  '/@',
+  '/assets/',
+  '/firebase-applet-config.json',
+];
+
+export function shouldLogRequest(path: string, statusCode: number): boolean {
+  if (statusCode >= 400) {
+    return true;
+  }
+  return !STATIC_ASSET_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
 export function createRequestLogger(options: { enabled?: boolean } = {}) {
   const enabled = options.enabled ?? true;
 
@@ -53,10 +68,13 @@ export function createRequestLogger(options: { enabled?: boolean } = {}) {
     const sanitizedPath = sanitizePathForLog(req.originalUrl || req.url || '/');
 
     res.on('finish', () => {
+      if (!shouldLogRequest(sanitizedPath, res.statusCode)) {
+        return;
+      }
       const elapsedMs = Number(process.hrtime.bigint() - startNs) / 1_000_000;
       const entry = {
         timestamp: new Date().toISOString(),
-        level: 'info',
+        level: res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info',
         requestId,
         method,
         path: sanitizedPath,

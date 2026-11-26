@@ -516,6 +516,13 @@ export function validateCollectionRecord(
         ? { ok: true, value: result.value as unknown as Record<string, unknown>, errors: [] }
         : { ok: false, value: null, errors: result.errors };
     }
+
+    default:
+      return {
+        ok: false,
+        value: null,
+        errors: [`Unsupported Firestore collection "${collection}".`],
+      };
   }
 }
 

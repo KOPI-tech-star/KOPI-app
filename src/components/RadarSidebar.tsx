@@ -16,6 +16,7 @@ import {
   type SidebarNavId,
   type SidebarNavItem,
 } from '../config/opportunityRadar';
+import { AccountControls } from './AccountControls';
 import { KopiLogo } from './KopiLogo';
 
 interface RadarSidebarProps {
@@ -162,11 +163,14 @@ export function RadarSidebar({
         </nav>
       </div>
 
-      {/* Bottom Promotional Card */}
-      <aside
-        aria-label="Submit a problem"
-        className="mt-6 rounded-2xl border border-[#402818]/12 bg-[#FFF2E5] p-4"
-      >
+      <div className="mt-4">
+        <AccountControls variant="sidebar" onActionTaken={onCloseMobile} />
+
+        {/* Bottom Promotional Card */}
+        <aside
+          aria-label="Submit a problem"
+          className="mt-4 rounded-2xl border border-[#402818]/12 bg-[#FFF2E5] p-4"
+        >
         <p className="font-newsreader text-[1.0625rem] font-semibold leading-snug text-[#402818]">
           {RADAR_DASHBOARD_COPY.promoTitle}
         </p>
@@ -189,7 +193,8 @@ export function RadarSidebar({
             className="shrink-0 transition-transform duration-150 group-hover:translate-x-0.5"
           />
         </button>
-      </aside>
+        </aside>
+      </div>
     </div>
   );
 

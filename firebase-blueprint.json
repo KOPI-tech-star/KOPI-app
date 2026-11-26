@@ -1,4 +1,202 @@
 {
-  "entities": {},
-  "firestore": {}
+  "entities": {
+    "DemoProblem": {
+      "title": "DemoProblem",
+      "description": "Public, read-only illustrative demonstration problem record. Strictly restricted to the three approved demo document IDs.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Approved demonstration problem identifier matching document ID."
+        },
+        "slug": {
+          "type": "string",
+          "description": "URL-safe slug matching document ID."
+        },
+        "title": {
+          "type": "string",
+          "description": "Problem headline."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Illustrative problem overview."
+        },
+        "categoryLabel": {
+          "type": "string",
+          "description": "Display category label."
+        },
+        "categories": {
+          "type": "array",
+          "description": "Structured category tags.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "illustration": {
+          "type": "string",
+          "description": "Illustration variant key."
+        },
+        "tags": {
+          "type": "array",
+          "description": "Illustrative topic tags.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "affectedAudience": {
+          "type": "array",
+          "description": "Groups potentially impacted in the illustrative scenario.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurrenceNote": {
+          "type": "string",
+          "description": "Honest statement noting recurrence is not yet verified."
+        },
+        "isIllustrativeDemo": {
+          "type": "boolean",
+          "description": "Explicit marker separating illustrative records from verified research."
+        },
+        "evidenceAvailability": {
+          "type": "string",
+          "description": "Must be 'none' for unverified demonstration documents."
+        },
+        "verifiedEvidenceCount": {
+          "type": "number",
+          "description": "Must be 0 for demonstration documents."
+        },
+        "coverageNote": {
+          "type": "string",
+          "description": "Explanation of evidence coverage limitations."
+        },
+        "researchLimitations": {
+          "type": "array",
+          "description": "Explicit evidence and sampling limitations.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unknownsAndRisks": {
+          "type": "array",
+          "description": "Remaining unknowns requiring primary verification.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "schemaVersion": {
+          "type": "number",
+          "description": "Integer schema version."
+        }
+      },
+      "required": [
+        "id",
+        "slug",
+        "title",
+        "summary",
+        "categoryLabel",
+        "categories",
+        "illustration",
+        "tags",
+        "affectedAudience",
+        "recurrenceNote",
+        "isIllustrativeDemo",
+        "evidenceAvailability",
+        "verifiedEvidenceCount",
+        "coverageNote",
+        "researchLimitations",
+        "unknownsAndRisks",
+        "schemaVersion"
+      ]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Minimal authenticated Kopi user record storing self-declared 18+ eligibility and timestamped legal consent records without unnecessary PII.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID matching the document ID."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Optional sanitized display name (bounded <= 120 chars; may be null)."
+        },
+        "eligibility": {
+          "type": "object",
+          "description": "Self-declared 18+ eligibility metadata (ageVerificationStatus: 'self_declared_unverified')."
+        },
+        "consents": {
+          "type": "object",
+          "description": "Versioned Terms of Service and Privacy Policy acceptance records with timestamps."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server-assigned account creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server-assigned last update timestamp."
+        },
+        "schemaVersion": {
+          "type": "number",
+          "description": "Positive integer schema version."
+        }
+      },
+      "required": [
+        "uid",
+        "eligibility",
+        "consents",
+        "createdAt",
+        "updatedAt",
+        "schemaVersion"
+      ]
+    },
+    "SavedOpportunity": {
+      "title": "SavedOpportunity",
+      "description": "User-owned bookmark linking a user account to an approved demonstration or published opportunity, keyed by problemId.",
+      "type": "object",
+      "properties": {
+        "problemId": {
+          "type": "string",
+          "description": "Approved problem identifier matching the document ID."
+        },
+        "savedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server-assigned timestamp when the opportunity was saved."
+        },
+        "sourceScreen": {
+          "type": "string",
+          "description": "Surface from which the user initiated the bookmark."
+        },
+        "schemaVersion": {
+          "type": "number",
+          "description": "Positive integer schema version."
+        }
+      },
+      "required": [
+        "problemId",
+        "savedAt",
+        "sourceScreen",
+        "schemaVersion"
+      ]
+    }
+  },
+  "firestore": {
+    "/demoProblems/{problemId}": {
+      "schema": "DemoProblem",
+      "description": "Public read-only single-document demonstration records for the 3 approved demo IDs. Collection listing and all client writes are denied."
+    },
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Owner-only user profile document storing self-declared 18+ eligibility and legal consent timestamps without unnecessary PII."
+    },
+    "/users/{userId}/savedOpportunities/{problemId}": {
+      "schema": "SavedOpportunity",
+      "description": "Owner-only subcollection storing bookmarks keyed by approved problemId to prevent duplicates."
+    }
+  }
 }

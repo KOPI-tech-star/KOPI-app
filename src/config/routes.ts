@@ -4,7 +4,8 @@ export type KopiRoute =
   | '/problem-explorer'
   | `/problem-explorer/${string}`
   | '/opportunity-evaluation'
-  | `/opportunity-evaluation/${string}`;
+  | `/opportunity-evaluation/${string}`
+  | '/saved';
 
 const EXPLORER_PREFIX = '/problem-explorer/';
 const EVALUATION_ROUTE = '/opportunity-evaluation';
@@ -92,6 +93,10 @@ export function normalizeRoute(pathname: string): KopiRoute {
   if (clean.startsWith(EVALUATION_PREFIX)) {
     const rawSegment = clean.slice(EVALUATION_PREFIX.length);
     return `/opportunity-evaluation/${rawSegment}`;
+  }
+
+  if (clean === '/saved' || clean === '/saved-opportunities') {
+    return '/saved';
   }
 
   return '/';
