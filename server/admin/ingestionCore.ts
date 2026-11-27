@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import type { Problem } from '../../src/config/problemExplorer';
-import { validateEvidenceReferences } from '../../src/config/problemExplorer';
 import {
   DEMO_PROBLEMS_SEED_MANIFEST,
 } from '../../src/data/demoSeedManifest';
@@ -9,7 +8,6 @@ import {
   FIRESTORE_COLLECTION_NAMES,
   type EvidenceLinkDocument,
   type FirestoreCollectionName,
-  type PublishedProblemDocument,
 } from '../../src/data/firestoreContracts';
 import {
   containsUnsafeHtmlOrScript,
@@ -21,10 +19,12 @@ import {
   validateDemoProblemDocument,
   validateFirestoreEvaluationRecord,
   validateProblemClusterRecord,
+  validatePublishedProblemDocument,
   validateResearchInsightRecord,
   validateSourceObservationRecord,
   type ValidationOutcome,
 } from '../../src/data/firestoreValidation';
+import { invalidateStaleClusterApproval } from './clusteringAndEvidence';
 import type { AdminFirestoreStore } from './firebaseAdminClient';
 
 export type ConflictPolicy = 'abort' | 'skip' | 'overwrite';
@@ -270,93 +270,6 @@ function validateEvidenceLinkRecord(
   };
 }
 
-function validatePublishedProblemRecord(
-  expectedDocId: string,
-  raw: unknown
-): ValidationOutcome<PublishedProblemDocument> {
-  const errors: string[] = [];
-  if (!isPlainObject(raw)) {
-    return { ok: false, value: null, errors: ['publishedProblems document must be an object.'] };
-  }
-
-  if (raw.id !== expectedDocId || raw.slug !== expectedDocId) {
-    errors.push(`Published problem "id" and "slug" must equal document ID "${expectedDocId}".`);
-  }
-  if (raw.isIllustrativeDemo !== false) {
-    errors.push('Published problem must set isIllustrativeDemo === false.');
-  }
-  if (raw.publicationStatus !== 'published') {
-    errors.push('Published problem must set publicationStatus === "published".');
-  }
-  if (
-    typeof raw.verifiedEvidenceCount !== 'number' ||
-    !Number.isInteger(raw.verifiedEvidenceCount) ||
-    raw.verifiedEvidenceCount < 1
-  ) {
-    errors.push('Published problem requires verifiedEvidenceCount >= 1.');
-  }
-  const publishedAt = parseValidIsoTimestamp(raw.publishedAt);
-  if (!publishedAt) {
-    errors.push('Published problem "publishedAt" must be a valid timestamp.');
-  }
-  if (
-    typeof raw.schemaVersion !== 'number' ||
-    !Number.isInteger(raw.schemaVersion) ||
-    raw.schemaVersion < 1
-  ) {
-    errors.push('Field "schemaVersion" must be a positive integer.');
-  }
-  if (typeof raw.title !== 'string' || !raw.title.trim() || containsUnsafeHtmlOrScript(raw.title)) {
-    errors.push('Published problem "title" must be a safe non-empty string.');
-  }
-  if (typeof raw.summary !== 'string' || !raw.summary.trim() || containsUnsafeHtmlOrScript(raw.summary)) {
-    errors.push('Published problem "summary" must be a safe non-empty string.');
-  }
-
-  const candidateProblem: Problem = {
-    id: expectedDocId,
-    slug: expectedDocId,
-    title: typeof raw.title === 'string' ? raw.title : '',
-    summary: typeof raw.summary === 'string' ? raw.summary : '',
-    categories: Array.isArray(raw.categories) ? (raw.categories as Problem['categories']) : [],
-    affectedAudience: Array.isArray(raw.affectedAudience)
-      ? (raw.affectedAudience as readonly string[])
-      : [],
-    recurrenceNote: typeof raw.recurrenceNote === 'string' ? raw.recurrenceNote : '',
-    isIllustrativeDemo: false,
-    evidenceCoverage: {
-      sourceCount: typeof raw.sourceCoverage === 'number' ? raw.sourceCoverage : null,
-      verifiedCount:
-        typeof raw.verifiedEvidenceCount === 'number' ? raw.verifiedEvidenceCount : 0,
-      illustrativeCount: 0,
-      lastUpdated: typeof raw.lastUpdated === 'string' ? raw.lastUpdated : null,
-      coverageNote: typeof raw.coverageNote === 'string' ? raw.coverageNote : '',
-    },
-    evidence: [],
-    insights: Array.isArray(raw.insights) ? (raw.insights as Problem['insights']) : [],
-    existingAlternatives: Array.isArray(raw.existingAlternatives)
-      ? (raw.existingAlternatives as Problem['existingAlternatives'])
-      : [],
-    unknownsAndRisks: Array.isArray(raw.unknownsAndRisks)
-      ? (raw.unknownsAndRisks as readonly string[])
-      : [],
-  };
-  const evidenceIntegrity = validateEvidenceReferences(candidateProblem);
-  if (!evidenceIntegrity.valid) {
-    errors.push(...evidenceIntegrity.errors);
-  }
-
-  if (errors.length > 0) {
-    return { ok: false, value: null, errors };
-  }
-
-  return {
-    ok: true,
-    value: raw as unknown as PublishedProblemDocument,
-    errors: [],
-  };
-}
-
 function createZeroEvidenceEvaluationFallbackProblem(problemId: string): Problem {
   return {
     id: problemId,
@@ -511,7 +424,7 @@ export function validateCollectionRecord(
     }
 
     case 'publishedProblems': {
-      const result = validatePublishedProblemRecord(documentId, rawData);
+      const result = validatePublishedProblemDocument(documentId, rawData);
       return result.ok && result.value
         ? { ok: true, value: result.value as unknown as Record<string, unknown>, errors: [] }
         : { ok: false, value: null, errors: result.errors };
@@ -658,13 +571,26 @@ export interface ExecuteIngestionOptions {
   readonly conflictPolicy?: ConflictPolicy;
   readonly approvedOverwritePaths?: readonly string[];
   readonly batchContext?: BatchValidationContext;
+  readonly allowEditorialClusterTransitions?: boolean;
 }
+
+const RESEARCH_COLLECTIONS = new Set<FirestoreCollectionName>([
+  'dataSources',
+  'sourceObservations',
+  'problemClusters',
+  'evidenceLinks',
+  'researchInsights',
+]);
 
 /**
  * Reusable, validated, idempotent ingestion and seeding engine.
  * Enforces:
  * - Pre-write schema/integrity validation across the entire batch.
  * - Cross-record deduplication on `evidenceLinks`.
+ * - Publication governance: blocks direct `publishedProblems` ingestion, restricts
+ *   editorial statuses unless invoked by `review-cluster`, verifies active/approved
+ *   sources and verified observations, blocks mutations to published clusters, and
+ *   atomically invalidates stale approval on modified approved clusters.
  * - Conflict detection (never overwrites conflicting records silently).
  * - Explicit approval gating before any write.
  * - Post-write read-back + integrity re-validation.
@@ -676,6 +602,112 @@ export async function executeIngestionPlan(
 ): Promise<IngestionExecutionReport> {
   const conflictPolicy: ConflictPolicy = options.conflictPolicy ?? 'abort';
   const approvedOverwriteSet = new Set(options.approvedOverwritePaths ?? []);
+  const allowEditorialClusterTransitions = Boolean(
+    options.allowEditorialClusterTransitions
+  );
+
+  const touchesResearchCollections = records.some((r) =>
+    RESEARCH_COLLECTIONS.has(r.collection)
+  );
+
+  const storeSourcesById = new Map<string, Record<string, unknown>>();
+  const storeObsById = new Map<string, Record<string, unknown>>();
+  const storeClustersById = new Map<
+    string,
+    { data: Record<string, unknown>; updateTimeMs: number | null }
+  >();
+  const storeLinks: Array<{ problemId: string; observationId: string }> = [];
+
+  if (touchesResearchCollections) {
+    const [sourceSnaps, obsSnaps, clusterSnaps, linkSnaps] = await Promise.all([
+      store.listDocuments(FIRESTORE_COLLECTION_NAMES.dataSources, { limit: 500 }),
+      store.listDocuments(FIRESTORE_COLLECTION_NAMES.sourceObservations, { limit: 1000 }),
+      store.listDocuments(FIRESTORE_COLLECTION_NAMES.problemClusters, { limit: 1000 }),
+      store.listDocuments(FIRESTORE_COLLECTION_NAMES.evidenceLinks, { limit: 1000 }),
+    ]);
+
+    for (const s of sourceSnaps) {
+      if (s.exists && s.data) {
+        const sid = typeof s.data.sourceId === 'string' ? s.data.sourceId.trim() : s.id;
+        storeSourcesById.set(sid, s.data);
+      }
+    }
+    for (const o of obsSnaps) {
+      if (o.exists && o.data) {
+        const oid =
+          typeof o.data.observationId === 'string' ? o.data.observationId.trim() : o.id;
+        storeObsById.set(oid, o.data);
+      }
+    }
+    for (const c of clusterSnaps) {
+      if (c.exists && c.data) {
+        const cid = typeof c.data.problemId === 'string' ? c.data.problemId.trim() : c.id;
+        storeClustersById.set(cid, { data: c.data, updateTimeMs: c.updateTimeMs });
+      }
+    }
+    for (const l of linkSnaps) {
+      if (
+        l.exists &&
+        l.data &&
+        typeof l.data.problemId === 'string' &&
+        typeof l.data.observationId === 'string'
+      ) {
+        storeLinks.push({
+          problemId: l.data.problemId.trim(),
+          observationId: l.data.observationId.trim(),
+        });
+      }
+    }
+  }
+
+  const effectiveSourcesById = new Map(storeSourcesById);
+  const effectiveObsById = new Map(storeObsById);
+  const effectiveClusterIds = new Set<string>(storeClustersById.keys());
+
+  for (const record of records) {
+    if (!isPlainObject(record.data)) continue;
+    if (record.collection === 'dataSources') {
+      effectiveSourcesById.set(record.documentId, record.data);
+    } else if (record.collection === 'sourceObservations') {
+      effectiveObsById.set(record.documentId, record.data);
+    } else if (record.collection === 'problemClusters') {
+      effectiveClusterIds.add(record.documentId);
+    }
+  }
+
+  const activeApprovedSourceIds = new Set<string>();
+  for (const [sourceId, src] of effectiveSourcesById.entries()) {
+    if (
+      src.permissionReviewStatus === 'approved' &&
+      src.activationStatus === 'active'
+    ) {
+      activeApprovedSourceIds.add(sourceId);
+    }
+  }
+
+  const activeObservationIds = new Set<string>();
+  const verifiedObservationIds = new Set<string>();
+  for (const [obsId, obs] of effectiveObsById.entries()) {
+    if (obs.removalOrRestrictionStatus !== 'active') continue;
+    activeObservationIds.add(obsId);
+    const sourceId = typeof obs.sourceId === 'string' ? obs.sourceId.trim() : '';
+    if (
+      obs.verificationStatus === 'verified' &&
+      activeApprovedSourceIds.has(sourceId)
+    ) {
+      verifiedObservationIds.add(obsId);
+    }
+  }
+
+  const context: BatchValidationContext = {
+    ...options.batchContext,
+    ...(touchesResearchCollections
+      ? {
+          knownSourceIds: activeApprovedSourceIds,
+          verifiedObservationIds,
+        }
+      : {}),
+  };
 
   const validationIssues: IngestionValidationIssue[] = [];
   const seenPaths = new Set<string>();
@@ -687,19 +719,8 @@ export async function executeIngestionPlan(
     digest: string;
   }[] = [];
 
-  const batchSourceIds = new Set<string>(options.batchContext?.knownSourceIds ?? []);
-  for (const record of records) {
-    if (record.collection === 'dataSources' && typeof record.data.sourceId === 'string') {
-      batchSourceIds.add(record.data.sourceId.trim());
-    }
-  }
-
-  const context: BatchValidationContext = {
-    ...options.batchContext,
-    knownSourceIds: batchSourceIds.size > 0 ? batchSourceIds : undefined,
-  };
-
   const validatedEvidenceLinks: EvidenceLinkDocument[] = [];
+  const directlyWrittenClusterIds = new Set<string>();
 
   for (const record of records) {
     const docPath = `${record.collection}/${record.documentId}`;
@@ -712,6 +733,17 @@ export async function executeIngestionPlan(
       continue;
     }
     seenPaths.add(docPath);
+
+    if (record.collection === 'publishedProblems') {
+      validationIssues.push({
+        collection: record.collection,
+        documentId: record.documentId,
+        errors: [
+          'Direct ingestion into "publishedProblems" is prohibited. Use review-cluster and publish-problem after editorial approval and sanitization.',
+        ],
+      });
+      continue;
+    }
 
     const outcome = validateCollectionRecord(
       record.collection,
@@ -729,8 +761,86 @@ export async function executeIngestionPlan(
       continue;
     }
 
+    if (record.collection === 'problemClusters') {
+      const clusterData = outcome.value;
+      const incomingStatus = String(clusterData.publicationStatus ?? '');
+      const existingCluster = storeClustersById.get(record.documentId);
+      const existingStatus = existingCluster
+        ? String(existingCluster.data.publicationStatus ?? '')
+        : null;
+
+      if (!allowEditorialClusterTransitions) {
+        const hasEditorialMetadata =
+          (typeof clusterData.approvedBy === 'string' && clusterData.approvedBy.trim().length > 0) ||
+          Boolean(clusterData.approvedAt) ||
+          Boolean(clusterData.publishedAt) ||
+          Boolean(clusterData.archivedAt) ||
+          (typeof clusterData.archiveReason === 'string' && clusterData.archiveReason.trim().length > 0);
+
+        if (
+          incomingStatus === 'approved' ||
+          incomingStatus === 'published' ||
+          incomingStatus === 'archived' ||
+          hasEditorialMetadata
+        ) {
+          validationIssues.push({
+            collection: record.collection,
+            documentId: record.documentId,
+            errors: [
+              `Cluster "${record.documentId}" cannot set publicationStatus="${incomingStatus}" or approval/publication/archive metadata via generic ingestion. Use review-cluster, publish-problem, and archive-problem.`,
+            ],
+          });
+          continue;
+        }
+
+        if (existingStatus === 'approved' && incomingStatus !== 'draft') {
+          validationIssues.push({
+            collection: record.collection,
+            documentId: record.documentId,
+            errors: [
+              `Cluster "${record.documentId}" is currently approved; material edits outside editorial review must reset publicationStatus to "draft".`,
+            ],
+          });
+          continue;
+        }
+      }
+
+      if (existingStatus === 'published') {
+        validationIssues.push({
+          collection: record.collection,
+          documentId: record.documentId,
+          errors: [
+            `Cluster "${record.documentId}" is currently published and cannot be overwritten via ingestion. Archive it via archive-problem first.`,
+          ],
+        });
+        continue;
+      }
+
+      directlyWrittenClusterIds.add(record.documentId);
+    }
+
     if (record.collection === 'evidenceLinks') {
-      validatedEvidenceLinks.push(outcome.value as unknown as EvidenceLinkDocument);
+      const link = outcome.value as unknown as EvidenceLinkDocument;
+      const linkErrors: string[] = [];
+      if (!activeObservationIds.has(link.observationId)) {
+        linkErrors.push(
+          `Evidence link "${record.documentId}" references missing or inactive observation "${link.observationId}".`
+        );
+      }
+      if (!effectiveClusterIds.has(link.problemId)) {
+        linkErrors.push(
+          `Evidence link "${record.documentId}" references unknown problem cluster "${link.problemId}".`
+        );
+      }
+      if (linkErrors.length > 0) {
+        validationIssues.push({
+          collection: record.collection,
+          documentId: record.documentId,
+          errors: linkErrors,
+        });
+        continue;
+      }
+      validatedEvidenceLinks.push(link);
     }
 
     const normalizedData = canonicalizeValue(outcome.value) as Record<string, unknown>;
@@ -835,6 +945,147 @@ export async function executeIngestionPlan(
       existingUpdateTimeMs: existing.updateTimeMs,
       normalizedData: item.data,
     });
+  }
+
+  if (touchesResearchCollections) {
+    const allLinks = [
+      ...storeLinks,
+      ...validatedEvidenceLinks.map((l) => ({
+        problemId: l.problemId,
+        observationId: l.observationId,
+      })),
+    ];
+    const obsToClusterIds = new Map<string, Set<string>>();
+    for (const l of allLinks) {
+      let set = obsToClusterIds.get(l.observationId);
+      if (!set) {
+        set = new Set();
+        obsToClusterIds.set(l.observationId, set);
+      }
+      set.add(l.problemId);
+    }
+
+    const sourceToClusterIds = new Map<string, Set<string>>();
+    for (const [obsId, obs] of effectiveObsById.entries()) {
+      const sourceId = typeof obs.sourceId === 'string' ? obs.sourceId.trim() : '';
+      const linkedClusters = obsToClusterIds.get(obsId);
+      if (!sourceId || !linkedClusters) continue;
+      let set = sourceToClusterIds.get(sourceId);
+      if (!set) {
+        set = new Set();
+        sourceToClusterIds.set(sourceId, set);
+      }
+      for (const cid of linkedClusters) set.add(cid);
+    }
+
+    const affectedPublishedIds = new Set<string>();
+    const executableAffectedApprovedIds = new Set<string>();
+
+    for (const decision of planned) {
+      if (decision.action === 'unchanged') continue;
+      if (decision.action === 'conflict' && conflictPolicy === 'skip') continue;
+
+      const linkedClusterIds = new Set<string>();
+      if (decision.collection === 'evidenceLinks' || decision.collection === 'researchInsights') {
+        const pid = String(decision.normalizedData.problemId ?? '').trim();
+        if (pid) linkedClusterIds.add(pid);
+      } else if (decision.collection === 'sourceObservations') {
+        for (const cid of obsToClusterIds.get(decision.documentId) ?? []) {
+          linkedClusterIds.add(cid);
+        }
+      } else if (decision.collection === 'dataSources') {
+        for (const cid of sourceToClusterIds.get(decision.documentId) ?? []) {
+          linkedClusterIds.add(cid);
+        }
+      }
+
+      for (const cid of linkedClusterIds) {
+        if (directlyWrittenClusterIds.has(cid)) continue;
+        const existingCluster = storeClustersById.get(cid);
+        if (!existingCluster) continue;
+        const status = String(existingCluster.data.publicationStatus ?? '');
+        if (status === 'published') {
+          affectedPublishedIds.add(cid);
+        } else if (
+          status === 'approved' &&
+          (decision.action === 'create' || decision.action === 'approved_overwrite')
+        ) {
+          executableAffectedApprovedIds.add(cid);
+        }
+      }
+    }
+
+    if (affectedPublishedIds.size > 0) {
+      const pubIssues: IngestionValidationIssue[] = Array.from(affectedPublishedIds)
+        .sort()
+        .map((cid) => ({
+          collection: 'problemClusters',
+          documentId: cid,
+          errors: [
+            `Cannot modify sources, observations, evidenceLinks, or researchInsights linked to published cluster "${cid}". Archive it via archive-problem first.`,
+          ],
+        }));
+
+      return {
+        mode: options.mode,
+        projectId: store.projectId,
+        databaseId: store.databaseId,
+        conflictPolicy,
+        approved: options.approved,
+        validationPassed: false,
+        validationIssues: pubIssues,
+        totalRecords: records.length,
+        planned: [],
+        summary: {
+          create: 0,
+          unchanged: 0,
+          conflict: 0,
+          approvedOverwrite: 0,
+          appliedCreates: 0,
+          appliedUpdates: 0,
+          skippedConflicts: 0,
+          verifiedWrites: 0,
+        },
+        blockedReason:
+          'Pre-write governance validation failed: published cluster inputs cannot be mutated directly. Zero writes executed.',
+        postWriteVerification: [],
+      };
+    }
+
+    for (const cid of executableAffectedApprovedIds) {
+      const existingSnap = await store.getDocument(
+        FIRESTORE_COLLECTION_NAMES.problemClusters,
+        cid
+      );
+      if (!existingSnap.exists || !existingSnap.data) continue;
+      const parsedCluster = validateProblemClusterRecord(existingSnap.data);
+      if (!parsedCluster.ok || !parsedCluster.value) continue;
+      if (parsedCluster.value.publicationStatus !== 'approved') continue;
+
+      const invalidated = invalidateStaleClusterApproval(parsedCluster.value, {
+        reasonNote: 'Linked research records updated via administrative ingestion.',
+      });
+      const normalizedInvalidated = canonicalizeValue(
+        invalidated
+      ) as Record<string, unknown>;
+      const changedFields = diffTopLevelFields(
+        existingSnap.data,
+        normalizedInvalidated
+      );
+      if (changedFields.length > 0) {
+        planned.push({
+          collection: FIRESTORE_COLLECTION_NAMES.problemClusters,
+          documentId: cid,
+          documentPath: `problemClusters/${cid}`,
+          action: 'approved_overwrite',
+          changedFields,
+          digest: computeRecordDigest(normalizedInvalidated),
+          existingDigest: computeRecordDigest(existingSnap.data),
+          existingUpdateTimeMs: existingSnap.updateTimeMs,
+          normalizedData: normalizedInvalidated,
+        });
+      }
+    }
   }
 
   const createCount = planned.filter((p) => p.action === 'create').length;

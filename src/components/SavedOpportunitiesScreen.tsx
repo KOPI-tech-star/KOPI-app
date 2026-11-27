@@ -184,7 +184,8 @@ export function SavedOpportunitiesScreen({
 
             <p className="font-dm-sans mt-2 max-w-[64ch] text-[0.9375rem] leading-[1.55] text-[#705848]">
               Bookmarks stored under your Google-authenticated account persist in Cloud
-              Firestore across sessions. Demonstration records remain illustrative only.
+              Firestore across sessions. Verified research and illustrative examples remain
+              clearly separated.
             </p>
           </section>
 
@@ -272,7 +273,10 @@ export function SavedOpportunitiesScreen({
                           >
                             <div className="min-w-0">
                               <p className="font-dm-sans text-[0.75rem] font-semibold uppercase tracking-[0.05em] text-[#806957]">
-                                {problem ? problem.categories.join(' · ') : 'Demo record'} · Browser draft
+                                {problem ? problem.categories.join(' · ') : 'Saved record'} ·{' '}
+                                {problem && !problem.isIllustrativeDemo
+                                  ? 'Verified research'
+                                  : 'Browser draft'}
                               </p>
                               <h3 className="font-newsreader mt-1 text-[1.125rem] font-semibold text-[#402818]">
                                 {problem ? problem.title : draft.problemId}
@@ -472,16 +476,22 @@ export function SavedOpportunitiesScreen({
                                     <span className="font-semibold tracking-[0.06em] uppercase">
                                       {problem
                                         ? problem.categories.join(' · ')
-                                        : 'Approved Problem'}
+                                        : 'Saved Problem'}
                                     </span>
                                     <span aria-hidden="true">·</span>
                                     <span className="tabular-nums text-[#806957]">
                                       Saved {formatSavedDate(saved.savedAt)}
                                     </span>
                                     <span aria-hidden="true">·</span>
-                                    <span className="text-[#806957]">
-                                      Illustrative example
-                                    </span>
+                                    {problem && !problem.isIllustrativeDemo ? (
+                                      <span className="rounded-sm bg-[#7A8463]/16 px-1.5 py-0.5 font-semibold text-[#4D573B]">
+                                        Verified research
+                                      </span>
+                                    ) : (
+                                      <span className="text-[#806957]">
+                                        {problem ? 'Illustrative example' : 'Archived or unavailable'}
+                                      </span>
+                                    )}
                                   </div>
 
                                   <h2 className="font-newsreader mt-1.5 text-[1.25rem] font-semibold leading-[1.25] text-[#402818] md:text-[1.35rem]">

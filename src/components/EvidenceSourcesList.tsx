@@ -14,6 +14,10 @@ const SOURCE_TYPE_LABELS: Record<EvidenceRecord['sourceType'], string> = {
   interview_note: 'Interview note',
   review_excerpt: 'Review excerpt',
   field_observation: 'Field observation',
+  research_publication: 'Research publication',
+  government_dataset: 'Public / government dataset',
+  news_article: 'News or trade report',
+  community_submission: 'Community submission',
   dataset_demo: 'Demonstration note',
 };
 

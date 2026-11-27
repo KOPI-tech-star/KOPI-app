@@ -1,5 +1,4 @@
 import type {
-  ApprovedDemoProblemId,
   SavedOpportunitySourceScreen,
 } from './firestoreContracts';
 import {
@@ -12,9 +11,14 @@ import {
 export const GUEST_BOOKMARKS_STORAGE_KEY = 'kopi_guest_saved_opportunities_v1';
 
 export interface GuestDraftBookmark {
-  readonly problemId: ApprovedDemoProblemId;
+  readonly problemId: string;
   readonly savedAt: string;
   readonly sourceScreen: SavedOpportunitySourceScreen;
+}
+
+export interface GuestBookmarkFilterOptions {
+  readonly allowPublishedIds?: boolean;
+  readonly isApprovedId?: (id: string) => boolean;
 }
 
 export interface StorageLike {
@@ -31,6 +35,22 @@ const VALID_SOURCE_SCREENS: ReadonlySet<string> = new Set([
   'guest-migration',
 ]);
 
+function isPermittedGuestProblemId(
+  problemId: string,
+  options: GuestBookmarkFilterOptions = {}
+): boolean {
+  if (!isValidFirestoreDocId(problemId)) {
+    return false;
+  }
+  if (isApprovedDemoProblemId(problemId)) {
+    return true;
+  }
+  if (options.isApprovedId) {
+    return options.isApprovedId(problemId);
+  }
+  return options.allowPublishedIds ?? true;
+}
+
 function getBrowserStorage(storage?: StorageLike | null): StorageLike | null {
   if (storage !== undefined) {
     return storage;
@@ -45,7 +65,10 @@ function getBrowserStorage(storage?: StorageLike | null): StorageLike | null {
   }
 }
 
-export function parseGuestDraftBookmarks(rawJson: string | null): GuestDraftBookmark[] {
+export function parseGuestDraftBookmarks(
+  rawJson: string | null,
+  options: GuestBookmarkFilterOptions = {}
+): GuestDraftBookmark[] {
   if (!rawJson) return [];
   let parsed: unknown;
   try {
@@ -56,13 +79,13 @@ export function parseGuestDraftBookmarks(rawJson: string | null): GuestDraftBook
 
   if (!Array.isArray(parsed)) return [];
 
-  const seenIds = new Set<ApprovedDemoProblemId>();
+  const seenIds = new Set<string>();
   const validated: GuestDraftBookmark[] = [];
 
   for (const item of parsed) {
     if (!isPlainObject(item)) continue;
     const rawId = typeof item.problemId === 'string' ? item.problemId.trim() : '';
-    if (!rawId || !isValidFirestoreDocId(rawId) || !isApprovedDemoProblemId(rawId)) {
+    if (!rawId || !isPermittedGuestProblemId(rawId, options)) {
       continue;
     }
     if (seenIds.has(rawId)) continue;
@@ -85,12 +108,13 @@ export function parseGuestDraftBookmarks(rawJson: string | null): GuestDraftBook
 }
 
 export function loadGuestDraftBookmarks(
-  storage?: StorageLike | null
+  storage?: StorageLike | null,
+  options: GuestBookmarkFilterOptions = {}
 ): GuestDraftBookmark[] {
   const target = getBrowserStorage(storage);
   if (!target) return [];
   try {
-    return parseGuestDraftBookmarks(target.getItem(GUEST_BOOKMARKS_STORAGE_KEY));
+    return parseGuestDraftBookmarks(target.getItem(GUEST_BOOKMARKS_STORAGE_KEY), options);
   } catch {
     return [];
   }
@@ -116,10 +140,11 @@ export function persistGuestDraftBookmarks(
 export function addOrKeepGuestDraftBookmark(
   current: readonly GuestDraftBookmark[],
   problemId: string,
-  sourceScreen: SavedOpportunitySourceScreen
+  sourceScreen: SavedOpportunitySourceScreen,
+  options: GuestBookmarkFilterOptions = {}
 ): GuestDraftBookmark[] {
   const trimmed = problemId.trim();
-  if (!isValidFirestoreDocId(trimmed) || !isApprovedDemoProblemId(trimmed)) {
+  if (!isPermittedGuestProblemId(trimmed, options)) {
     return [...current];
   }
   if (current.some((entry) => entry.problemId === trimmed)) {
@@ -143,18 +168,18 @@ export function removeGuestDraftBookmark(
 }
 
 /**
- * Returns only guest bookmarks that are validated approved problem IDs and not
+ * Returns only guest bookmarks that are valid problem IDs and not
  * already stored in the signed-in user's Firestore savedOpportunities collection.
  */
 export function computePendingGuestMigrations(
   guestDrafts: readonly GuestDraftBookmark[],
-  existingAccountProblemIds: readonly string[]
+  existingAccountProblemIds: readonly string[],
+  options: GuestBookmarkFilterOptions = {}
 ): GuestDraftBookmark[] {
   const existingSet = new Set(existingAccountProblemIds);
   return guestDrafts.filter(
     (entry) =>
-      isValidFirestoreDocId(entry.problemId) &&
-      isApprovedDemoProblemId(entry.problemId) &&
+      isPermittedGuestProblemId(entry.problemId, options) &&
       !existingSet.has(entry.problemId)
   );
 }

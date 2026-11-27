@@ -1,10 +1,11 @@
-import { ArrowRight, Bookmark, FileQuestion } from 'lucide-react';
+import { ArrowRight, Bookmark, CheckCircle2, FileQuestion } from 'lucide-react';
 import type { OpportunityIllustrationKey } from '../config/opportunityRadar';
 import type { Problem } from '../config/problemExplorer';
 import { OpportunityCardIllustration } from './OpportunityCardIllustration';
 
 interface ExplorerProblemCardProps {
   problem: Problem;
+  illustration?: OpportunityIllustrationKey;
   onInvestigate: (problem: Problem) => void;
   isSaved?: boolean;
   isSaving?: boolean;
@@ -19,16 +20,29 @@ const PROBLEM_ILLUSTRATION_MAP: Record<string, OpportunityIllustrationKey> = {
 
 export function ExplorerProblemCard({
   problem,
+  illustration,
   onInvestigate,
   isSaved = false,
   isSaving = false,
   onToggleBookmark,
 }: ExplorerProblemCardProps) {
-  const illustrationKey = PROBLEM_ILLUSTRATION_MAP[problem.id];
-  const hasEvidence = problem.evidence.length > 0;
-  const evidenceLabel = hasEvidence
-    ? `${problem.evidence.length} source record${problem.evidence.length === 1 ? '' : 's'} available`
-    : 'Evidence not yet available';
+  const illustrationKey = illustration ?? PROBLEM_ILLUSTRATION_MAP[problem.id];
+  const isVerifiedResearch = !problem.isIllustrativeDemo && problem.evidence.length > 0;
+  const evidenceLabel = isVerifiedResearch
+    ? [
+        `${problem.evidenceCoverage.verifiedCount} verified observation${problem.evidenceCoverage.verifiedCount === 1 ? '' : 's'}`,
+        problem.independentEvidenceCount !== undefined
+          ? `${problem.independentEvidenceCount} independent`
+          : null,
+        problem.sourceDiversityCount !== undefined
+          ? `${problem.sourceDiversityCount} source${problem.sourceDiversityCount === 1 ? '' : 's'}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : problem.evidence.length > 0
+      ? `${problem.evidence.length} source record${problem.evidence.length === 1 ? '' : 's'} available`
+      : 'Evidence not yet available';
 
   return (
     <article
@@ -47,13 +61,25 @@ export function ExplorerProblemCard({
       <div className="flex min-w-0 flex-1 flex-col justify-between gap-3">
         <div>
           <div className="flex items-start justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <span className="font-dm-sans text-[0.75rem] font-semibold tracking-[0.06em] uppercase text-[#705848]">
                 {problem.categories.join(' · ')}
               </span>
-              {problem.isIllustrativeDemo && (
+              {problem.isIllustrativeDemo ? (
                 <span className="font-dm-sans text-[0.75rem] font-medium text-[#806957]">
                   · Illustrative example
+                </span>
+              ) : (
+                <span
+                  data-testid={`explorer-origin-badge-${problem.id}`}
+                  className="font-dm-sans inline-flex items-center rounded-sm bg-[#7A8463]/16 px-1.5 py-0.5 text-[0.6875rem] font-semibold tracking-[0.03em] uppercase text-[#4D573B]"
+                >
+                  Verified Research
+                </span>
+              )}
+              {problem.geographicalCoverage && problem.geographicalCoverage.length > 0 && (
+                <span className="font-dm-sans text-[0.75rem] text-[#806957]">
+                  · {problem.geographicalCoverage.join(', ')}
                 </span>
               )}
             </div>
@@ -97,12 +123,21 @@ export function ExplorerProblemCard({
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#402818]/10 pt-3">
           <div className="font-dm-sans flex items-center gap-1.5 text-[0.8125rem] font-medium text-[#705848]">
-            <FileQuestion
-              size={15}
-              strokeWidth={1.9}
-              aria-hidden="true"
-              className="shrink-0 text-[#806957]"
-            />
+            {isVerifiedResearch ? (
+              <CheckCircle2
+                size={15}
+                strokeWidth={2}
+                aria-hidden="true"
+                className="shrink-0 text-[#4D573B]"
+              />
+            ) : (
+              <FileQuestion
+                size={15}
+                strokeWidth={1.9}
+                aria-hidden="true"
+                className="shrink-0 text-[#806957]"
+              />
+            )}
             <span>{evidenceLabel}</span>
           </div>
 

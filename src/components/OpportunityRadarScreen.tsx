@@ -92,6 +92,8 @@ export function OpportunityRadarScreen({
     status: loadStatus,
     opportunities,
     missingIds,
+    publishedCount,
+    demoCount,
     errorCode,
     errorMessage,
     isDevOfflineFixture,
@@ -412,18 +414,26 @@ export function OpportunityRadarScreen({
                   className="font-dm-sans mt-1 flex items-center gap-1.5 text-[0.78rem] font-medium text-[#806957]"
                 >
                   <Sparkles size={13} strokeWidth={2} aria-hidden="true" className="text-[#C65A1B]" />
-                  <span>{RADAR_DASHBOARD_COPY.opportunitiesNotice}</span>
+                  <span>
+                    {publishedCount > 0
+                      ? `${publishedCount} verified research problem${publishedCount === 1 ? '' : 's'} and ${demoCount} illustrative example${demoCount === 1 ? '' : 's'} — no fabricated numeric scores.`
+                      : RADAR_DASHBOARD_COPY.opportunitiesNotice}
+                  </span>
                 </p>
               </div>
 
               <button
                 type="button"
-                onClick={() =>
-                  handleOpenPlaceholder(
-                    'All Opportunities',
-                    'The full Problem Explorer directory will display verified opportunities once backend research pipelines are connected. Currently showing illustrative demonstration examples.'
-                  )
-                }
+                onClick={() => {
+                  if (onNavigateToExplorer) {
+                    onNavigateToExplorer();
+                  } else {
+                    handleOpenPlaceholder(
+                      'All Opportunities',
+                      'The full Problem Explorer directory displays verified research alongside illustrative demonstration examples.'
+                    );
+                  }
+                }}
                 className="font-dm-sans group inline-flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-1 text-[0.875rem] font-semibold text-[#C65A1B] transition-colors duration-150 hover:text-[#9E4310] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#402818]"
               >
                 <span>{RADAR_DASHBOARD_COPY.viewAllLabel}</span>
@@ -507,9 +517,21 @@ export function OpportunityRadarScreen({
                       <div>
                         {/* Card Top Row: Category + Bookmark */}
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-dm-sans text-[0.75rem] font-semibold tracking-[0.06em] uppercase text-[#705848]">
-                            {item.categoryLabel}
-                          </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-dm-sans text-[0.75rem] font-semibold tracking-[0.06em] uppercase text-[#705848]">
+                              {item.categoryLabel}
+                            </span>
+                            <span
+                              data-testid={`radar-origin-badge-${item.id}`}
+                              className={`font-dm-sans inline-flex items-center rounded-sm px-1.5 py-0.5 text-[0.6875rem] font-semibold tracking-[0.03em] uppercase ${
+                                item.isIllustrative
+                                  ? 'bg-[#402818]/8 text-[#705848]'
+                                  : 'bg-[#7A8463]/16 text-[#4D573B]'
+                              }`}
+                            >
+                              {item.isIllustrative ? 'Illustrative Example' : 'Verified Research'}
+                            </span>
+                          </div>
 
                           <button
                             type="button"
@@ -554,7 +576,7 @@ export function OpportunityRadarScreen({
                         </p>
                       </div>
 
-                      {/* Honest Unverified Evidence Metadata + Inspect Action */}
+                      {/* Honest Evidence & Assessment Metadata + Inspect Action */}
                       <div className="mt-4 border-t border-[#402818]/10 pt-3">
                         <dl className="grid grid-cols-2 gap-2 text-[0.75rem]">
                           <div>
@@ -585,7 +607,7 @@ export function OpportunityRadarScreen({
                             } else {
                               handleOpenPlaceholder(
                                 item.title,
-                                'Detailed source citations, recurring complaint threads, and market sizing for this illustrative example will open in Problem Explorer once the research database is connected.'
+                                'Detailed source citations and problem investigation view require Problem Explorer routing.'
                               );
                             }
                           }}
@@ -605,13 +627,13 @@ export function OpportunityRadarScreen({
                 className="mt-4 rounded-2xl border border-[#402818]/12 bg-[#FAE8D7]/60 px-6 py-8 text-center"
               >
                 <p className="font-newsreader text-[1.25rem] font-semibold text-[#402818]">
-                  No illustrative examples match this view
+                  No problems match this view
                 </p>
                 <p className="font-dm-sans mx-auto mt-1.5 max-w-md text-[0.875rem] leading-relaxed text-[#705848]">
                   {activeQuery
-                    ? `No demonstration opportunities matched "${activeQuery}"`
-                    : `No demonstration opportunities are currently tagged under "${activeTopic ?? activeCategory}".`}{' '}
-                  Reset filters to return to the 3 current illustrative examples.
+                    ? `No opportunities matched "${activeQuery}"`
+                    : `No opportunities are currently tagged under "${activeTopic ?? activeCategory}".`}{' '}
+                  Reset filters to return to the available problems.
                 </p>
                 {hasActiveFilters && (
                   <button

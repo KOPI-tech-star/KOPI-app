@@ -1,12 +1,17 @@
 import type {
   OpportunityCardItem,
+  OpportunityIllustrationKey,
   QuickExploreCategory,
   TrendingTopic,
 } from '../config/opportunityRadar';
 import {
   sanitizeExternalUrl,
   validateEvidenceReferences,
+  type EvidenceRecord,
+  type EvidenceSourceType,
+  type ExistingAlternative,
   type Problem,
+  type ProblemInsight,
 } from '../config/problemExplorer';
 import {
   isApprovedScoringMethodology,
@@ -20,11 +25,17 @@ import {
   SUPPORTED_TRENDING_TOPICS,
   VALID_PUBLICATION_TRANSITIONS,
   type ApprovedDemoProblemId,
+  type ClusterEvidenceSummary,
+  type CommercialRelevanceAssessment,
+  type CommercialRelevanceDimensionAssessment,
+  type CommercialRelevanceDimensionKey,
+  type CommercialRelevanceStatus,
   type DataSourceDocument,
   type DemoProblemDocument,
   type EvidenceLinkDocument,
   type ProblemClusterDocument,
   type ProblemPublicationStatus,
+  type PublishedProblemDocument,
   type ResearchInsightDocument,
   type SavedOpportunityDocument,
   type SavedOpportunitySourceScreen,
@@ -60,6 +71,51 @@ export function isApprovedDemoProblemId(
 
 export function containsUnsafeHtmlOrScript(text: string): boolean {
   return /<\s*\/?\s*[a-z][^>]*>|javascript:|data:text\/html/i.test(text);
+}
+
+const TRACKING_QUERY_PARAMS = new Set([
+  'fbclid',
+  'gclid',
+  'mc_cid',
+  'mc_eid',
+  'ref',
+  'igshid',
+]);
+
+export function canonicalizeUrl(rawUrl: string | null | undefined): string | null {
+  const safe = sanitizeExternalUrl(rawUrl);
+  if (!safe) return null;
+  try {
+    const parsed = new URL(safe);
+    parsed.hostname = parsed.hostname.toLowerCase();
+    if (parsed.port === '443') {
+      parsed.port = '';
+    }
+    parsed.hash = '';
+    const keptParams: [string, string][] = [];
+    for (const [k, v] of parsed.searchParams.entries()) {
+      const lower = k.toLowerCase();
+      if (lower.startsWith('utm_') || TRACKING_QUERY_PARAMS.has(lower)) {
+        continue;
+      }
+      keptParams.push([k, v]);
+    }
+    keptParams.sort(([a], [b]) => a.localeCompare(b));
+    parsed.search = '';
+    for (const [k, v] of keptParams) {
+      parsed.searchParams.append(k, v);
+    }
+    if (parsed.pathname.length > 1 && parsed.pathname.endsWith('/')) {
+      parsed.pathname = parsed.pathname.slice(0, -1);
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeTextForFingerprint(text: string): string {
+  return text.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 export function parseValidIsoTimestamp(value: unknown): string | null {
@@ -191,7 +247,14 @@ export function validateDataSourceRecord(
   const attributionRequirements = readSafeString(raw, 'attributionRequirements', MAX_STRING_LONG, errors);
   const retentionRestrictions = readSafeString(raw, 'retentionRestrictions', MAX_STRING_LONG, errors);
 
-  const allowedMechanisms = ['official_api', 'public_feed', 'manual_field_notes', 'dataset_license'];
+  const allowedMechanisms = [
+    'official_api',
+    'public_feed',
+    'manual_field_notes',
+    'dataset_license',
+    'customer_interview',
+    'community_submission',
+  ];
   const permittedAccessMechanism = raw.permittedAccessMechanism;
   if (typeof permittedAccessMechanism !== 'string' || !allowedMechanisms.includes(permittedAccessMechanism)) {
     errors.push('Invalid "permittedAccessMechanism".');
@@ -327,6 +390,91 @@ export function validateSourceObservationRecord(
     errors.push(`Observation "${observationId ?? 'unknown'}" is ${removalOrRestrictionStatus} and cannot be used.`);
   }
 
+  const allowedSourceTypes: readonly EvidenceSourceType[] = [
+    'forum_thread',
+    'support_ticket',
+    'interview_note',
+    'review_excerpt',
+    'field_observation',
+    'research_publication',
+    'government_dataset',
+    'news_article',
+    'community_submission',
+    'dataset_demo',
+  ];
+
+  const readOptionalSafeString = (
+    field: string,
+    maxLength: number
+  ): string | null | undefined => {
+    const val = raw[field];
+    if (val === undefined) return undefined;
+    if (val === null) return null;
+    if (typeof val !== 'string') {
+      errors.push(`Field "${field}" must be a string or null.`);
+      return null;
+    }
+    const trimmed = val.trim();
+    if (!trimmed) return null;
+    if (trimmed.length > maxLength) {
+      errors.push(`Field "${field}" exceeds maximum length of ${maxLength}.`);
+      return null;
+    }
+    if (containsUnsafeHtmlOrScript(trimmed)) {
+      errors.push(`Field "${field}" contains disallowed HTML or script content.`);
+      return null;
+    }
+    return trimmed;
+  };
+
+  let canonicalUrl: string | null | undefined = undefined;
+  if (raw.canonicalUrl !== undefined) {
+    if (raw.canonicalUrl === null) {
+      canonicalUrl = null;
+    } else {
+      const sanitizedCanonical = canonicalizeUrl(
+        typeof raw.canonicalUrl === 'string' ? raw.canonicalUrl : null
+      );
+      if (!sanitizedCanonical) {
+        errors.push('Field "canonicalUrl" must be null or a valid HTTPS URL.');
+      } else {
+        canonicalUrl = sanitizedCanonical;
+      }
+    }
+  }
+
+  const problemStatement = readOptionalSafeString('problemStatement', MAX_STRING_LONG);
+  const context = readOptionalSafeString('context', MAX_STRING_LONG);
+  const affectedCustomerSegment = readOptionalSafeString('affectedCustomerSegment', MAX_STRING_SHORT);
+  const reportedConsequences = readOptionalSafeString('reportedConsequences', MAX_STRING_LONG);
+  const existingWorkaround = readOptionalSafeString('existingWorkaround', MAX_STRING_LONG);
+  const spendingOrWtpSignal = readOptionalSafeString('spendingOrWtpSignal', MAX_STRING_SHORT);
+  const geography = readOptionalSafeString('geography', 120);
+  const sourceName = readOptionalSafeString('sourceName', MAX_STRING_SHORT);
+  const independentGroupKey = readOptionalSafeString('independentGroupKey', 160);
+  const extractionModel = readOptionalSafeString('extractionModel', 120);
+
+  let sourceType: EvidenceSourceType | undefined;
+  if (raw.sourceType !== undefined) {
+    if (
+      typeof raw.sourceType !== 'string' ||
+      !allowedSourceTypes.includes(raw.sourceType as EvidenceSourceType)
+    ) {
+      errors.push('Invalid "sourceType" on sourceObservation.');
+    } else {
+      sourceType = raw.sourceType as EvidenceSourceType;
+    }
+  }
+
+  let extractedByAi: boolean | undefined;
+  if (raw.extractedByAi !== undefined) {
+    if (typeof raw.extractedByAi !== 'boolean') {
+      errors.push('Field "extractedByAi" must be a boolean.');
+    } else {
+      extractedByAi = raw.extractedByAi;
+    }
+  }
+
   if (typeof raw.schemaVersion !== 'number' || !Number.isInteger(raw.schemaVersion) || raw.schemaVersion < 1) {
     errors.push('Field "schemaVersion" must be a positive integer.');
   }
@@ -335,23 +483,38 @@ export function validateSourceObservationRecord(
     return { ok: false, value: null, errors };
   }
 
+  const normalized: SourceObservationDocument = {
+    observationId: observationId!,
+    sourceId: sourceId!,
+    externalReference: externalReference!,
+    permittedSourceUrl,
+    ...(canonicalUrl !== undefined ? { canonicalUrl } : {}),
+    permittedExcerptOrSummary: permittedExcerptOrSummary!,
+    ...(problemStatement !== undefined ? { problemStatement } : {}),
+    ...(context !== undefined ? { context } : {}),
+    ...(affectedCustomerSegment !== undefined ? { affectedCustomerSegment } : {}),
+    ...(reportedConsequences !== undefined ? { reportedConsequences } : {}),
+    ...(existingWorkaround !== undefined ? { existingWorkaround } : {}),
+    ...(spendingOrWtpSignal !== undefined ? { spendingOrWtpSignal } : {}),
+    ...(geography !== undefined ? { geography } : {}),
+    ...(sourceType !== undefined ? { sourceType } : {}),
+    ...(sourceName !== undefined ? { sourceName } : {}),
+    ...(independentGroupKey !== undefined ? { independentGroupKey } : {}),
+    observationTimestamp: observationTimestamp!,
+    publicationTimestamp,
+    contentFingerprint: contentFingerprint!,
+    verificationStatus: verificationStatus as SourceObservationDocument['verificationStatus'],
+    provenance: provenance!,
+    retentionPolicy: retentionPolicy!,
+    removalOrRestrictionStatus: removalOrRestrictionStatus as SourceObservationDocument['removalOrRestrictionStatus'],
+    ...(extractedByAi !== undefined ? { extractedByAi } : {}),
+    ...(extractionModel !== undefined ? { extractionModel } : {}),
+    schemaVersion: raw.schemaVersion as number,
+  };
+
   return {
     ok: true,
-    value: {
-      observationId: observationId!,
-      sourceId: sourceId!,
-      externalReference: externalReference!,
-      permittedSourceUrl,
-      permittedExcerptOrSummary: permittedExcerptOrSummary!,
-      observationTimestamp: observationTimestamp!,
-      publicationTimestamp,
-      contentFingerprint: contentFingerprint!,
-      verificationStatus: verificationStatus as SourceObservationDocument['verificationStatus'],
-      provenance: provenance!,
-      retentionPolicy: retentionPolicy!,
-      removalOrRestrictionStatus: removalOrRestrictionStatus as SourceObservationDocument['removalOrRestrictionStatus'],
-      schemaVersion: raw.schemaVersion as number,
-    },
+    value: normalized,
     errors: [],
   };
 }
@@ -496,6 +659,123 @@ export function validateResearchInsightRecord(
   };
 }
 
+const ALLOWED_RELEVANCE_STATUSES: readonly CommercialRelevanceStatus[] = [
+  'supported',
+  'partially_supported',
+  'insufficient_evidence',
+  'contradicted',
+];
+
+const ALLOWED_RELEVANCE_KEYS: readonly CommercialRelevanceDimensionKey[] = [
+  'severity',
+  'recurrence',
+  'customer_clarity',
+  'existing_alternatives',
+  'economic_signals',
+  'addressability',
+  'evidence_strength',
+];
+
+export function validateCommercialRelevanceAssessment(
+  raw: unknown
+): ValidationOutcome<CommercialRelevanceAssessment> {
+  const errors: string[] = [];
+  if (!isPlainObject(raw)) {
+    return { ok: false, value: null, errors: ['commercialRelevance must be an object.'] };
+  }
+  if ('overallScore' in raw || 'score' in raw || 'numericScore' in raw) {
+    errors.push('Qualitative commercialRelevance must not contain numerical score fields.');
+  }
+
+  const assessedAt = parseValidIsoTimestamp(raw.assessedAt);
+  if (!assessedAt) errors.push('commercialRelevance.assessedAt must be a valid timestamp.');
+
+  const assessedBy = readSafeString(raw, 'assessedBy', 120, errors);
+  const overallSummary = readSafeString(raw, 'overallSummary', MAX_STRING_LONG, errors);
+
+  let founderDecisionNote: string | null = null;
+  if (raw.founderDecisionNote !== null && raw.founderDecisionNote !== undefined) {
+    founderDecisionNote = readSafeString(raw, 'founderDecisionNote', MAX_STRING_LONG, errors);
+  }
+
+  const dimensions: CommercialRelevanceDimensionAssessment[] = [];
+  if (!Array.isArray(raw.dimensions) || raw.dimensions.length === 0 || raw.dimensions.length > 7) {
+    errors.push('commercialRelevance.dimensions must contain 1 to 7 dimension assessments.');
+  } else {
+    const seenKeys = new Set<string>();
+    for (let i = 0; i < raw.dimensions.length; i += 1) {
+      const dim = raw.dimensions[i];
+      if (!isPlainObject(dim)) {
+        errors.push(`commercialRelevance.dimensions[${i}] must be an object.`);
+        continue;
+      }
+      if ('score' in dim && dim.score !== null) {
+        errors.push(`commercialRelevance.dimensions[${i}] must not assign a numerical score.`);
+      }
+      const key = dim.key;
+      if (
+        typeof key !== 'string' ||
+        !ALLOWED_RELEVANCE_KEYS.includes(key as CommercialRelevanceDimensionKey)
+      ) {
+        errors.push(`Invalid commercialRelevance dimension key "${String(key)}".`);
+      } else if (seenKeys.has(key)) {
+        errors.push(`Duplicate commercialRelevance dimension key "${key}".`);
+      } else {
+        seenKeys.add(key);
+      }
+
+      const status = dim.status;
+      if (
+        typeof status !== 'string' ||
+        !ALLOWED_RELEVANCE_STATUSES.includes(status as CommercialRelevanceStatus)
+      ) {
+        errors.push(`Invalid commercialRelevance dimension status "${String(status)}".`);
+      }
+
+      const label = readSafeString(dim, 'label', 120, errors);
+      const summary = readSafeString(dim, 'summary', MAX_STRING_LONG, errors);
+      const supportingObservationIds = readSafeStringArray(
+        dim,
+        'supportingObservationIds',
+        { allowEmpty: true, maxItems: 50, maxItemLength: 128 },
+        errors
+      );
+
+      let unresolvedQuestion: string | null = null;
+      if (dim.unresolvedQuestion !== null && dim.unresolvedQuestion !== undefined) {
+        unresolvedQuestion = readSafeString(dim, 'unresolvedQuestion', MAX_STRING_SHORT, errors);
+      }
+
+      if (errors.length === 0) {
+        dimensions.push({
+          key: key as CommercialRelevanceDimensionKey,
+          label: label!,
+          status: status as CommercialRelevanceStatus,
+          summary: summary!,
+          supportingObservationIds: supportingObservationIds!,
+          unresolvedQuestion,
+        });
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, value: null, errors };
+  }
+
+  return {
+    ok: true,
+    value: {
+      assessedAt: assessedAt!,
+      assessedBy: assessedBy!,
+      overallSummary: overallSummary!,
+      founderDecisionNote,
+      dimensions,
+    },
+    errors: [],
+  };
+}
+
 /**
  * Runtime validator for `problemClusters` documents.
  */
@@ -548,8 +828,11 @@ export function validateProblemClusterRecord(
   if (
     publicationStatus !== 'draft' &&
     publicationStatus !== 'under_review' &&
+    publicationStatus !== 'approved' &&
     publicationStatus !== 'published' &&
-    publicationStatus !== 'withdrawn'
+    publicationStatus !== 'rejected' &&
+    publicationStatus !== 'withdrawn' &&
+    publicationStatus !== 'archived'
   ) {
     errors.push('Invalid "publicationStatus".');
   } else if (publicationStatus === 'withdrawn') {
@@ -579,6 +862,20 @@ export function validateProblemClusterRecord(
     errors.push('Only verified problem clusters can hold publicationStatus "published".');
   }
 
+  let commercialRelevance: CommercialRelevanceAssessment | null | undefined = undefined;
+  if (raw.commercialRelevance !== undefined) {
+    if (raw.commercialRelevance === null) {
+      commercialRelevance = null;
+    } else {
+      const crValidation = validateCommercialRelevanceAssessment(raw.commercialRelevance);
+      if (!crValidation.ok || !crValidation.value) {
+        errors.push(...crValidation.errors);
+      } else {
+        commercialRelevance = crValidation.value;
+      }
+    }
+  }
+
   const createdAt = parseValidIsoTimestamp(raw.createdAt);
   const updatedAt = parseValidIsoTimestamp(raw.updatedAt);
   if (!createdAt) errors.push('Field "createdAt" must be a valid timestamp.');
@@ -586,6 +883,91 @@ export function validateProblemClusterRecord(
 
   if (typeof raw.schemaVersion !== 'number' || !Number.isInteger(raw.schemaVersion) || raw.schemaVersion < 1) {
     errors.push('Field "schemaVersion" must be a positive integer.');
+  }
+
+  const readOptClusterStr = (field: string, maxLen: number): string | null | undefined => {
+    const val = raw[field];
+    if (val === undefined) return undefined;
+    if (val === null) return null;
+    return readSafeString(raw, field, maxLen, errors);
+  };
+
+  const readOptClusterIso = (field: string): string | null | undefined => {
+    const val = raw[field];
+    if (val === undefined) return undefined;
+    if (val === null) return null;
+    const parsed = parseValidIsoTimestamp(val);
+    if (!parsed) {
+      errors.push(`Field "${field}" must be null or a valid ISO timestamp.`);
+      return null;
+    }
+    return parsed;
+  };
+
+  const underlyingNeed = readOptClusterStr('underlyingNeed', MAX_STRING_LONG);
+  const context = readOptClusterStr('context', MAX_STRING_LONG);
+  const reviewedBy = readOptClusterStr('reviewedBy', 120);
+  const reviewedAt = readOptClusterIso('reviewedAt');
+  const reviewNotes = readOptClusterStr('reviewNotes', MAX_STRING_LONG);
+  const approvedBy = readOptClusterStr('approvedBy', 120);
+  const approvedAt = readOptClusterIso('approvedAt');
+  const publishedAt = readOptClusterIso('publishedAt');
+  const founderExceptionReason = readOptClusterStr('founderExceptionReason', MAX_STRING_LONG);
+  const archivedAt = readOptClusterIso('archivedAt');
+  const archiveReason = readOptClusterStr('archiveReason', MAX_STRING_LONG);
+
+  const reportedConsequences =
+    raw.reportedConsequences !== undefined
+      ? readSafeStringArray(raw, 'reportedConsequences', { allowEmpty: true, maxItems: 20, maxItemLength: MAX_STRING_SHORT }, errors)
+      : undefined;
+  const existingWorkarounds =
+    raw.existingWorkarounds !== undefined
+      ? readSafeStringArray(raw, 'existingWorkarounds', { allowEmpty: true, maxItems: 20, maxItemLength: MAX_STRING_SHORT }, errors)
+      : undefined;
+  const unresolvedQuestions =
+    raw.unresolvedQuestions !== undefined
+      ? readSafeStringArray(raw, 'unresolvedQuestions', { allowEmpty: true, maxItems: 20, maxItemLength: MAX_STRING_LONG }, errors)
+      : undefined;
+
+  let existingAlternatives: readonly ExistingAlternative[] | undefined = undefined;
+  if (raw.existingAlternatives !== undefined) {
+    if (!Array.isArray(raw.existingAlternatives)) {
+      errors.push('Field "existingAlternatives" must be an array.');
+    } else {
+      const alts: ExistingAlternative[] = [];
+      for (let i = 0; i < raw.existingAlternatives.length; i += 1) {
+        const entry = raw.existingAlternatives[i];
+        if (!isPlainObject(entry)) {
+          errors.push(`existingAlternatives[${i}] must be an object.`);
+          continue;
+        }
+        const id = readSafeString(entry, 'id', 128, errors);
+        const name = readSafeString(entry, 'name', MAX_STRING_SHORT, errors);
+        const category = readSafeString(entry, 'category', 120, errors);
+        const observedShortcoming = readSafeString(entry, 'observedShortcoming', MAX_STRING_LONG, errors);
+        const supportingEvidenceIds = readSafeStringArray(
+          entry,
+          'supportingEvidenceIds',
+          { allowEmpty: true, maxItems: 25, maxItemLength: 128 },
+          errors
+        );
+        if (id && name && category && observedShortcoming && supportingEvidenceIds) {
+          alts.push({ id, name, category, observedShortcoming, supportingEvidenceIds });
+        }
+      }
+      existingAlternatives = alts;
+    }
+  }
+
+  let evidenceSummary: ClusterEvidenceSummary | null | undefined = undefined;
+  if (raw.evidenceSummary !== undefined) {
+    if (raw.evidenceSummary === null) {
+      evidenceSummary = null;
+    } else if (!isPlainObject(raw.evidenceSummary)) {
+      errors.push('Field "evidenceSummary" must be an object or null.');
+    } else {
+      evidenceSummary = raw.evidenceSummary as unknown as ClusterEvidenceSummary;
+    }
   }
 
   if (errors.length > 0) {
@@ -599,18 +981,514 @@ export function validateProblemClusterRecord(
       slug: slug!,
       title: title!,
       summary: summary!,
+      ...(underlyingNeed ? { underlyingNeed } : {}),
+      ...(context !== undefined ? { context } : {}),
       categories: rawCategories as readonly QuickExploreCategory[],
       affectedAudience: affectedAudience!,
+      ...(reportedConsequences ? { reportedConsequences } : {}),
+      ...(existingWorkarounds ? { existingWorkarounds } : {}),
+      ...(existingAlternatives ? { existingAlternatives } : {}),
       recurrenceStatus: recurrenceStatus as ProblemClusterDocument['recurrenceStatus'],
       recurrenceNote: recurrenceNote!,
       evidenceAvailability: evidenceAvailability as ProblemClusterDocument['evidenceAvailability'],
       researchLimitations: researchLimitations!,
+      ...(unresolvedQuestions ? { unresolvedQuestions } : {}),
+      ...(evidenceSummary !== undefined ? { evidenceSummary } : {}),
+      ...(commercialRelevance !== undefined ? { commercialRelevance } : {}),
       publicationStatus: publicationStatus as ProblemPublicationStatus,
+      ...(reviewedBy !== undefined ? { reviewedBy } : {}),
+      ...(reviewedAt !== undefined ? { reviewedAt } : {}),
+      ...(reviewNotes !== undefined ? { reviewNotes } : {}),
+      ...(approvedBy !== undefined ? { approvedBy } : {}),
+      ...(approvedAt !== undefined ? { approvedAt } : {}),
+      ...(publishedAt !== undefined ? { publishedAt } : {}),
+      ...(founderExceptionReason !== undefined ? { founderExceptionReason } : {}),
+      ...(archivedAt !== undefined ? { archivedAt } : {}),
+      ...(archiveReason !== undefined ? { archiveReason } : {}),
       createdAt: createdAt!,
       updatedAt: updatedAt!,
       schemaVersion: raw.schemaVersion as number,
     },
     errors: [],
+  };
+}
+
+const ALLOWED_SOURCE_TYPES: readonly EvidenceSourceType[] = [
+  'forum_thread',
+  'support_ticket',
+  'interview_note',
+  'review_excerpt',
+  'field_observation',
+  'research_publication',
+  'government_dataset',
+  'news_article',
+  'community_submission',
+  'dataset_demo',
+];
+
+/**
+ * Runtime validator for public `publishedProblems` documents fetched from Firestore.
+ * Enforces non-demo status, verified evidence integrity, qualitative relevance only,
+ * and absence of internal review fields or numeric opportunity scores.
+ */
+export function validatePublishedProblemDocument(
+  expectedDocId: string,
+  raw: unknown
+): ValidationOutcome<PublishedProblemDocument> {
+  const errors: string[] = [];
+
+  if (!isValidFirestoreDocId(expectedDocId)) {
+    return {
+      ok: false,
+      value: null,
+      errors: [`Document ID "${expectedDocId}" is not a valid Firestore document ID.`],
+    };
+  }
+
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      value: null,
+      errors: [`Malformed Firestore document for "${expectedDocId}": expected object.`],
+    };
+  }
+
+  // Strip-check internal fields that must never leak to public collection
+  for (const forbiddenField of ['reviewNotes', 'reviewedBy', 'approvedBy', 'internalComments']) {
+    if (forbiddenField in raw && raw[forbiddenField] !== undefined) {
+      errors.push(`Published problem "${expectedDocId}" contains internal editorial field "${forbiddenField}".`);
+    }
+  }
+
+  if ('opportunityScore' in raw && raw.opportunityScore !== null) {
+    errors.push(`Published problem "${expectedDocId}" must not include a numeric opportunityScore.`);
+  }
+
+  const id = readSafeString(raw, 'id', 128, errors);
+  const slug = readSafeString(raw, 'slug', 128, errors);
+  if (id && id !== expectedDocId) {
+    errors.push(`Published field "id" (${id}) does not match document ID "${expectedDocId}".`);
+  }
+  if (slug && slug !== expectedDocId) {
+    errors.push(`Published field "slug" (${slug}) does not match document ID "${expectedDocId}".`);
+  }
+
+  const title = readSafeString(raw, 'title', MAX_STRING_SHORT, errors);
+  const summary = readSafeString(raw, 'summary', MAX_STRING_LONG, errors);
+  const recurrenceNote = readSafeString(raw, 'recurrenceNote', MAX_STRING_SHORT, errors);
+  const coverageNote = readSafeString(raw, 'coverageNote', MAX_STRING_LONG, errors);
+  const publishedAt = parseValidIsoTimestamp(raw.publishedAt);
+  if (!publishedAt) {
+    errors.push('Field "publishedAt" must be a valid ISO timestamp.');
+  }
+
+  if (raw.isIllustrativeDemo !== false) {
+    errors.push(`Published problem "${expectedDocId}" must set isIllustrativeDemo === false.`);
+  }
+  if (raw.publicationStatus !== 'published') {
+    errors.push(`Published problem "${expectedDocId}" must hold publicationStatus === "published".`);
+  }
+
+  if (
+    typeof raw.verifiedEvidenceCount !== 'number' ||
+    !Number.isInteger(raw.verifiedEvidenceCount) ||
+    raw.verifiedEvidenceCount < 1
+  ) {
+    errors.push(`Published problem "${expectedDocId}" requires verifiedEvidenceCount >= 1.`);
+  }
+
+  let sourceCoverage: number | null = null;
+  if (raw.sourceCoverage !== null && raw.sourceCoverage !== undefined) {
+    if (typeof raw.sourceCoverage !== 'number' || !Number.isInteger(raw.sourceCoverage) || raw.sourceCoverage < 0) {
+      errors.push('Field "sourceCoverage" must be null or a non-negative integer.');
+    } else {
+      sourceCoverage = raw.sourceCoverage;
+    }
+  }
+
+  const lastUpdated =
+    raw.lastUpdated === null || raw.lastUpdated === undefined
+      ? null
+      : parseValidIsoTimestamp(raw.lastUpdated);
+  if (raw.lastUpdated !== null && raw.lastUpdated !== undefined && lastUpdated === null) {
+    errors.push('Field "lastUpdated" must be null or a valid ISO timestamp.');
+  }
+
+  const categories = readSafeStringArray(
+    raw,
+    'categories',
+    { allowEmpty: false, maxItems: 5, maxItemLength: 40 },
+    errors
+  );
+  if (categories) {
+    for (const cat of categories) {
+      if (!(SUPPORTED_PROBLEM_CATEGORIES as readonly string[]).includes(cat)) {
+        errors.push(`Published problem "${expectedDocId}" contains unsupported category "${cat}".`);
+      }
+    }
+  }
+
+  let tags: readonly TrendingTopic[] | undefined = undefined;
+  if (raw.tags !== undefined) {
+    const parsedTags = readSafeStringArray(
+      raw,
+      'tags',
+      { allowEmpty: true, maxItems: 6, maxItemLength: 60 },
+      errors
+    );
+    if (parsedTags) {
+      for (const tag of parsedTags) {
+        if (!(SUPPORTED_TRENDING_TOPICS as readonly string[]).includes(tag)) {
+          errors.push(`Published problem "${expectedDocId}" contains unsupported tag "${tag}".`);
+        }
+      }
+      tags = parsedTags as readonly TrendingTopic[];
+    }
+  }
+
+  let illustration: OpportunityIllustrationKey | undefined = undefined;
+  if (raw.illustration !== undefined) {
+    if (
+      typeof raw.illustration !== 'string' ||
+      !(SUPPORTED_ILLUSTRATION_KEYS as readonly string[]).includes(raw.illustration)
+    ) {
+      errors.push(`Published problem "${expectedDocId}" has invalid illustration key.`);
+    } else {
+      illustration = raw.illustration as OpportunityIllustrationKey;
+    }
+  }
+
+  let categoryLabel: string | undefined = undefined;
+  if (raw.categoryLabel !== undefined) {
+    categoryLabel = readSafeString(raw, 'categoryLabel', 120, errors) ?? undefined;
+  }
+
+  const affectedAudience = readSafeStringArray(
+    raw,
+    'affectedAudience',
+    { allowEmpty: false, maxItems: 10, maxItemLength: MAX_STRING_SHORT },
+    errors
+  );
+  const researchLimitations = readSafeStringArray(
+    raw,
+    'researchLimitations',
+    { allowEmpty: false, maxItems: 15, maxItemLength: MAX_STRING_LONG },
+    errors
+  );
+  const unknownsAndRisks = readSafeStringArray(
+    raw,
+    'unknownsAndRisks',
+    { allowEmpty: false, maxItems: 15, maxItemLength: MAX_STRING_LONG },
+    errors
+  );
+
+  // Parse and validate sanitized evidence records
+  const evidence: EvidenceRecord[] = [];
+  if (!Array.isArray(raw.evidence) || raw.evidence.length === 0) {
+    errors.push(`Published problem "${expectedDocId}" must include sanitized verified evidence records.`);
+  } else {
+    for (let i = 0; i < raw.evidence.length; i += 1) {
+      const ev = raw.evidence[i];
+      if (!isPlainObject(ev)) {
+        errors.push(`evidence[${i}] must be an object.`);
+        continue;
+      }
+      const evId = readSafeString(ev, 'id', 128, errors);
+      const evProblemId = readSafeString(ev, 'problemId', 128, errors);
+      const sourceName = readSafeString(ev, 'sourceName', MAX_STRING_SHORT, errors);
+      const excerpt = readSafeString(ev, 'excerpt', MAX_STRING_LONG, errors);
+      const sourceType = ev.sourceType;
+      if (
+        typeof sourceType !== 'string' ||
+        !ALLOWED_SOURCE_TYPES.includes(sourceType as EvidenceSourceType)
+      ) {
+        errors.push(`evidence[${i}].sourceType is invalid.`);
+      }
+      const verificationStatus = ev.verificationStatus;
+      if (verificationStatus !== 'verified' && verificationStatus !== 'unverified') {
+        errors.push(`evidence[${i}].verificationStatus must be "verified" or "unverified".`);
+      }
+      let externalUrl: string | null = null;
+      if (ev.externalUrl !== null && ev.externalUrl !== undefined) {
+        const sanitized = sanitizeExternalUrl(
+          typeof ev.externalUrl === 'string' ? ev.externalUrl : null
+        );
+        if (!sanitized) {
+          errors.push(`evidence[${i}].externalUrl must be null or a valid HTTPS URL.`);
+        } else {
+          externalUrl = sanitized;
+        }
+      }
+      const observedDate =
+        ev.observedDate === null || ev.observedDate === undefined
+          ? null
+          : parseValidIsoTimestamp(ev.observedDate);
+      if (ev.observedDate !== null && ev.observedDate !== undefined && !observedDate) {
+        errors.push(`evidence[${i}].observedDate must be null or a valid ISO date.`);
+      }
+
+      if (evId && evProblemId && sourceName && excerpt) {
+        evidence.push({
+          id: evId,
+          problemId: evProblemId,
+          sourceType: sourceType as EvidenceSourceType,
+          sourceName,
+          excerpt,
+          observedDate,
+          externalUrl,
+          verificationStatus: verificationStatus as EvidenceRecord['verificationStatus'],
+        });
+      }
+    }
+  }
+
+  // Parse insights
+  const insights: ProblemInsight[] = [];
+  if (!Array.isArray(raw.insights)) {
+    errors.push('Field "insights" must be an array.');
+  } else {
+    for (let i = 0; i < raw.insights.length; i += 1) {
+      const ins = raw.insights[i];
+      if (!isPlainObject(ins)) {
+        errors.push(`insights[${i}] must be an object.`);
+        continue;
+      }
+      const insId = readSafeString(ins, 'id', 128, errors);
+      const statement = readSafeString(ins, 'statement', MAX_STRING_LONG, errors);
+      const kind = ins.kind;
+      if (kind !== 'evidence_backed' && kind !== 'hypothesis') {
+        errors.push(`insights[${i}].kind must be "evidence_backed" or "hypothesis".`);
+      }
+      const supportingEvidenceIds = readSafeStringArray(
+        ins,
+        'supportingEvidenceIds',
+        { allowEmpty: true, maxItems: 25, maxItemLength: 128 },
+        errors
+      );
+      if (insId && statement && supportingEvidenceIds) {
+        insights.push({
+          id: insId,
+          statement,
+          kind: kind as ProblemInsight['kind'],
+          supportingEvidenceIds,
+        });
+      }
+    }
+  }
+
+  // Parse existingAlternatives
+  const existingAlternatives: ExistingAlternative[] = [];
+  if (!Array.isArray(raw.existingAlternatives)) {
+    errors.push('Field "existingAlternatives" must be an array.');
+  } else {
+    for (let i = 0; i < raw.existingAlternatives.length; i += 1) {
+      const alt = raw.existingAlternatives[i];
+      if (!isPlainObject(alt)) {
+        errors.push(`existingAlternatives[${i}] must be an object.`);
+        continue;
+      }
+      const altId = readSafeString(alt, 'id', 128, errors);
+      const name = readSafeString(alt, 'name', MAX_STRING_SHORT, errors);
+      const category = readSafeString(alt, 'category', 120, errors);
+      const observedShortcoming = readSafeString(alt, 'observedShortcoming', MAX_STRING_LONG, errors);
+      const supportingEvidenceIds = readSafeStringArray(
+        alt,
+        'supportingEvidenceIds',
+        { allowEmpty: true, maxItems: 25, maxItemLength: 128 },
+        errors
+      );
+      if (altId && name && category && observedShortcoming && supportingEvidenceIds) {
+        existingAlternatives.push({
+          id: altId,
+          name,
+          category,
+          observedShortcoming,
+          supportingEvidenceIds,
+        });
+      }
+    }
+  }
+
+  let commercialRelevance: CommercialRelevanceAssessment | null | undefined = undefined;
+  if (raw.commercialRelevance !== undefined) {
+    if (raw.commercialRelevance === null) {
+      commercialRelevance = null;
+    } else {
+      const cr = validateCommercialRelevanceAssessment(raw.commercialRelevance);
+      if (!cr.ok || !cr.value) {
+        errors.push(...cr.errors);
+      } else {
+        commercialRelevance = cr.value;
+      }
+    }
+  }
+
+  let founderExceptionNote: string | null | undefined = undefined;
+  if (raw.founderExceptionNote !== undefined) {
+    if (raw.founderExceptionNote === null) {
+      founderExceptionNote = null;
+    } else {
+      founderExceptionNote = readSafeString(raw, 'founderExceptionNote', MAX_STRING_LONG, errors);
+    }
+  }
+
+  let independentEvidenceCount: number | undefined = undefined;
+  if (raw.independentEvidenceCount !== undefined) {
+    if (typeof raw.independentEvidenceCount !== 'number' || !Number.isInteger(raw.independentEvidenceCount) || raw.independentEvidenceCount < 1) {
+      errors.push('Field "independentEvidenceCount" must be a positive integer.');
+    } else {
+      independentEvidenceCount = raw.independentEvidenceCount;
+    }
+  }
+
+  let sourceDiversityCount: number | undefined = undefined;
+  if (raw.sourceDiversityCount !== undefined) {
+    if (typeof raw.sourceDiversityCount !== 'number' || !Number.isInteger(raw.sourceDiversityCount) || raw.sourceDiversityCount < 1) {
+      errors.push('Field "sourceDiversityCount" must be a positive integer.');
+    } else {
+      sourceDiversityCount = raw.sourceDiversityCount;
+    }
+  }
+
+  const geographicalCoverage =
+    raw.geographicalCoverage !== undefined
+      ? readSafeStringArray(
+          raw,
+          'geographicalCoverage',
+          { allowEmpty: true, maxItems: 15, maxItemLength: 120 },
+          errors
+        ) ?? undefined
+      : undefined;
+
+  if (typeof raw.schemaVersion !== 'number' || !Number.isInteger(raw.schemaVersion) || raw.schemaVersion < 1) {
+    errors.push(`Published problem "${expectedDocId}" must have a positive integer schemaVersion.`);
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, value: null, errors };
+  }
+
+  const doc: PublishedProblemDocument = {
+    id: expectedDocId,
+    slug: expectedDocId,
+    title: title!,
+    summary: summary!,
+    ...(categoryLabel ? { categoryLabel } : {}),
+    categories: categories as readonly QuickExploreCategory[],
+    ...(illustration ? { illustration } : {}),
+    ...(tags ? { tags } : {}),
+    affectedAudience: affectedAudience!,
+    recurrenceNote: recurrenceNote!,
+    isIllustrativeDemo: false,
+    publishedAt: publishedAt!,
+    publicationStatus: 'published',
+    verifiedEvidenceCount: raw.verifiedEvidenceCount as number,
+    ...(independentEvidenceCount !== undefined ? { independentEvidenceCount } : {}),
+    ...(sourceDiversityCount !== undefined ? { sourceDiversityCount } : {}),
+    sourceCoverage,
+    ...(geographicalCoverage ? { geographicalCoverage } : {}),
+    lastUpdated,
+    coverageNote: coverageNote!,
+    evidence,
+    researchLimitations: researchLimitations!,
+    unknownsAndRisks: unknownsAndRisks!,
+    insights,
+    existingAlternatives,
+    ...(commercialRelevance !== undefined ? { commercialRelevance } : {}),
+    ...(founderExceptionNote !== undefined ? { founderExceptionNote } : {}),
+    schemaVersion: raw.schemaVersion as number,
+  };
+
+  const domainModel = toPublishedProblemDomainModel(doc);
+  const integrity = validateEvidenceReferences(domainModel);
+  if (!integrity.valid) {
+    return { ok: false, value: null, errors: integrity.errors };
+  }
+
+  return { ok: true, value: doc, errors: [] };
+}
+
+function defaultIllustrationForCategory(
+  categories: readonly QuickExploreCategory[]
+): OpportunityIllustrationKey {
+  if (categories.includes('Health') || categories.includes('Education')) {
+    return 'nutrition';
+  }
+  if (categories.includes('Sustainability')) {
+    return 'packaging';
+  }
+  return 'monsoon';
+}
+
+export function toPublishedProblemDomainModel(
+  doc: PublishedProblemDocument
+): Problem {
+  return {
+    id: doc.id,
+    slug: doc.slug,
+    title: doc.title,
+    summary: doc.summary,
+    categories: [...doc.categories],
+    affectedAudience: [...doc.affectedAudience],
+    recurrenceNote: doc.recurrenceNote,
+    isIllustrativeDemo: false,
+    publicationStatus: 'published',
+    evidenceCoverage: {
+      sourceCount: doc.sourceCoverage,
+      verifiedCount: doc.verifiedEvidenceCount,
+      illustrativeCount: 0,
+      lastUpdated: doc.lastUpdated,
+      coverageNote: doc.coverageNote,
+    },
+    evidence: [...doc.evidence],
+    insights: [...doc.insights],
+    existingAlternatives: [...doc.existingAlternatives],
+    unknownsAndRisks: [...doc.unknownsAndRisks],
+    independentEvidenceCount: doc.independentEvidenceCount,
+    sourceDiversityCount: doc.sourceDiversityCount,
+    geographicalCoverage: doc.geographicalCoverage ? [...doc.geographicalCoverage] : undefined,
+    researchLimitations: [...doc.researchLimitations],
+    commercialRelevanceSummary: doc.commercialRelevance?.overallSummary ?? null,
+    commercialRelevanceDimensions: doc.commercialRelevance?.dimensions.map((d) => ({
+      key: d.key,
+      label: d.label,
+      status: d.status,
+      summary: d.summary,
+      unresolvedQuestion: d.unresolvedQuestion,
+    })),
+    founderExceptionNote: doc.founderExceptionNote ?? null,
+    publishedAt: doc.publishedAt,
+  };
+}
+
+export function toPublishedOpportunityCardItem(
+  doc: PublishedProblemDocument
+): OpportunityCardItem {
+  const verifiedCount = doc.verifiedEvidenceCount;
+  const illustration = doc.illustration ?? defaultIllustrationForCategory(doc.categories);
+  return {
+    id: doc.id,
+    categoryLabel: doc.categoryLabel ?? doc.categories.join(' · '),
+    categories: [...doc.categories],
+    title: doc.title,
+    description: doc.summary,
+    illustration,
+    evidenceVolume: `${verifiedCount} verified observation${verifiedCount === 1 ? '' : 's'}`,
+    opportunityScore: doc.commercialRelevance ? 'Qualitative review' : 'Not available',
+    isIllustrative: false,
+    publishedAt: doc.publishedAt,
+    tags: doc.tags ? [...doc.tags] : [],
+  };
+}
+
+export function adaptValidatedPublishedProblem(
+  doc: PublishedProblemDocument
+): ValidatedProblemAdapter {
+  const illustration = doc.illustration ?? defaultIllustrationForCategory(doc.categories);
+  return {
+    problem: toPublishedProblemDomainModel(doc),
+    opportunity: toPublishedOpportunityCardItem(doc),
+    illustration,
   };
 }
 
@@ -1042,16 +1920,28 @@ export function validateUserProfileDocument(
   };
 }
 
+export interface SavedOpportunityValidationOptions {
+  readonly allowPublishedIds?: boolean;
+  readonly approvedPublishedIds?: ReadonlySet<string>;
+}
+
 /**
  * Runtime validator for `users/{uid}/savedOpportunities/{problemId}` documents.
  */
 export function validateSavedOpportunityDocument(
   expectedProblemId: string,
-  raw: unknown
+  raw: unknown,
+  options: SavedOpportunityValidationOptions = {}
 ): ValidationOutcome<SavedOpportunityDocument> {
   const errors: string[] = [];
 
-  if (!isValidFirestoreDocId(expectedProblemId) || !isApprovedDemoProblemId(expectedProblemId)) {
+  const isIdApproved =
+    isValidFirestoreDocId(expectedProblemId) &&
+    (isApprovedDemoProblemId(expectedProblemId) ||
+      Boolean(options.allowPublishedIds) ||
+      Boolean(options.approvedPublishedIds?.has(expectedProblemId)));
+
+  if (!isIdApproved) {
     return {
       ok: false,
       value: null,

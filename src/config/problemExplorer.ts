@@ -9,6 +9,10 @@ export type EvidenceSourceType =
   | 'interview_note'
   | 'review_excerpt'
   | 'field_observation'
+  | 'research_publication'
+  | 'government_dataset'
+  | 'news_article'
+  | 'community_submission'
   | 'dataset_demo';
 
 export type VerificationStatus =
@@ -52,6 +56,14 @@ export interface ExistingAlternative {
   readonly supportingEvidenceIds: readonly string[];
 }
 
+export interface QualitativeRelevanceSummaryItem {
+  readonly key: string;
+  readonly label: string;
+  readonly status: 'supported' | 'partially_supported' | 'insufficient_evidence' | 'contradicted';
+  readonly summary: string;
+  readonly unresolvedQuestion: string | null;
+}
+
 export interface Problem {
   readonly id: string;
   readonly slug: string;
@@ -61,11 +73,20 @@ export interface Problem {
   readonly affectedAudience: readonly string[];
   readonly recurrenceNote: string;
   readonly isIllustrativeDemo: boolean;
+  readonly publicationStatus?: 'demo' | 'published';
   readonly evidenceCoverage: EvidenceCoverage;
   readonly evidence: readonly EvidenceRecord[];
   readonly insights: readonly ProblemInsight[];
   readonly existingAlternatives: readonly ExistingAlternative[];
   readonly unknownsAndRisks: readonly string[];
+  readonly independentEvidenceCount?: number;
+  readonly sourceDiversityCount?: number;
+  readonly geographicalCoverage?: readonly string[];
+  readonly researchLimitations?: readonly string[];
+  readonly commercialRelevanceSummary?: string | null;
+  readonly commercialRelevanceDimensions?: readonly QualitativeRelevanceSummaryItem[];
+  readonly founderExceptionNote?: string | null;
+  readonly publishedAt?: string | null;
 }
 
 export interface ProblemFilterInput {

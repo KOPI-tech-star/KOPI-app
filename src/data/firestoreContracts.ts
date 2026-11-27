@@ -5,6 +5,7 @@ import type {
   TrendingTopic,
 } from '../config/opportunityRadar';
 import type {
+  EvidenceRecord,
   ExistingAlternative,
   Problem,
   ProblemInsight,
@@ -88,10 +89,10 @@ export interface UserProfileDocument {
 
 /**
  * Saved opportunity document stored at `users/{uid}/savedOpportunities/{problemId}`.
- * Keyed by `problemId` to prevent duplicates.
+ * Keyed by `problemId` to prevent duplicates across approved demo and published problems.
  */
 export interface SavedOpportunityDocument {
-  readonly problemId: ApprovedDemoProblemId;
+  readonly problemId: string;
   readonly savedAt: string;
   readonly sourceScreen: SavedOpportunitySourceScreen;
   readonly schemaVersion: number;
@@ -135,6 +136,14 @@ export type SourcePermissionReviewStatus =
 
 export type SourceActivationStatus = 'disabled' | 'active';
 
+export type SourceAccessMechanism =
+  | 'official_api'
+  | 'public_feed'
+  | 'manual_field_notes'
+  | 'dataset_license'
+  | 'customer_interview'
+  | 'community_submission';
+
 /**
  * Logical schema for `dataSources` (internal-only collection).
  * New sources default to `disabled`; metadata completeness alone does not establish legal permission.
@@ -143,7 +152,7 @@ export interface DataSourceDocument {
   readonly sourceId: string;
   readonly sourceName: string;
   readonly sourceCategory: string;
-  readonly permittedAccessMechanism: 'official_api' | 'public_feed' | 'manual_field_notes' | 'dataset_license';
+  readonly permittedAccessMechanism: SourceAccessMechanism;
   readonly termsOrLicenceReference: string;
   readonly permissionReviewStatus: SourcePermissionReviewStatus;
   readonly reviewDate: string | null;
@@ -159,15 +168,26 @@ export type ObservationRemovalStatus = 'active' | 'restricted' | 'removed';
 
 /**
  * Logical schema for `sourceObservations` (internal-only collection).
- * Stores bounded permitted excerpts/summaries and content fingerprints without personal identifiers
- * or full raw scrapes of external discussions.
+ * Stores evidence atoms with bounded permitted excerpts/summaries and deterministic
+ * content fingerprints without personal identifiers or raw scrapes.
  */
 export interface SourceObservationDocument {
   readonly observationId: string;
   readonly sourceId: string;
   readonly externalReference: string;
   readonly permittedSourceUrl: string | null;
+  readonly canonicalUrl?: string | null;
   readonly permittedExcerptOrSummary: string;
+  readonly problemStatement?: string | null;
+  readonly context?: string | null;
+  readonly affectedCustomerSegment?: string | null;
+  readonly reportedConsequences?: string | null;
+  readonly existingWorkaround?: string | null;
+  readonly spendingOrWtpSignal?: string | null;
+  readonly geography?: string | null;
+  readonly sourceType?: EvidenceRecord['sourceType'];
+  readonly sourceName?: string | null;
+  readonly independentGroupKey?: string | null;
   readonly observationTimestamp: string;
   readonly publicationTimestamp: string | null;
   readonly contentFingerprint: string;
@@ -175,14 +195,19 @@ export interface SourceObservationDocument {
   readonly provenance: string;
   readonly retentionPolicy: string;
   readonly removalOrRestrictionStatus: ObservationRemovalStatus;
+  readonly extractedByAi?: boolean;
+  readonly extractionModel?: string | null;
   readonly schemaVersion: number;
 }
 
 export type ProblemPublicationStatus =
   | 'draft'
   | 'under_review'
+  | 'approved'
   | 'published'
-  | 'withdrawn';
+  | 'rejected'
+  | 'withdrawn'
+  | 'archived';
 
 export type ProblemRecurrenceStatus = 'unknown' | 'emerging' | 'recurring';
 
@@ -195,11 +220,58 @@ export type EvidenceAvailabilityState =
 export const VALID_PUBLICATION_TRANSITIONS: Readonly<
   Record<ProblemPublicationStatus, readonly ProblemPublicationStatus[]>
 > = {
-  draft: ['under_review', 'withdrawn'],
-  under_review: ['draft', 'published', 'withdrawn'],
-  published: ['withdrawn'],
+  draft: ['under_review', 'rejected', 'withdrawn'],
+  under_review: ['draft', 'approved', 'published', 'rejected', 'withdrawn'],
+  approved: ['draft', 'under_review', 'published', 'rejected', 'archived', 'withdrawn'],
+  published: ['archived', 'withdrawn'],
+  rejected: ['draft'],
+  archived: ['draft'],
   withdrawn: [],
 } as const;
+
+export type CommercialRelevanceStatus =
+  | 'supported'
+  | 'partially_supported'
+  | 'insufficient_evidence'
+  | 'contradicted';
+
+export type CommercialRelevanceDimensionKey =
+  | 'severity'
+  | 'recurrence'
+  | 'customer_clarity'
+  | 'existing_alternatives'
+  | 'economic_signals'
+  | 'addressability'
+  | 'evidence_strength';
+
+export interface CommercialRelevanceDimensionAssessment {
+  readonly key: CommercialRelevanceDimensionKey;
+  readonly label: string;
+  readonly status: CommercialRelevanceStatus;
+  readonly summary: string;
+  readonly supportingObservationIds: readonly string[];
+  readonly unresolvedQuestion: string | null;
+}
+
+export interface CommercialRelevanceAssessment {
+  readonly assessedAt: string;
+  readonly assessedBy: string;
+  readonly overallSummary: string;
+  readonly founderDecisionNote: string | null;
+  readonly dimensions: readonly CommercialRelevanceDimensionAssessment[];
+}
+
+export interface ClusterEvidenceSummary {
+  readonly totalObservations: number;
+  readonly verifiedCount: number;
+  readonly independentRecordCount: number;
+  readonly sourceDiversityCount: number;
+  readonly sourceIds: readonly string[];
+  readonly geographicalCoverage: readonly string[];
+  readonly contradictoryCount: number;
+  readonly earliestObservedAt: string | null;
+  readonly latestObservedAt: string | null;
+}
 
 /**
  * Logical schema for `problemClusters` (internal-only collection).
@@ -209,13 +281,30 @@ export interface ProblemClusterDocument {
   readonly slug: string;
   readonly title: string;
   readonly summary: string;
+  readonly underlyingNeed?: string;
+  readonly context?: string | null;
   readonly categories: readonly QuickExploreCategory[];
   readonly affectedAudience: readonly string[];
+  readonly reportedConsequences?: readonly string[];
+  readonly existingWorkarounds?: readonly string[];
+  readonly existingAlternatives?: readonly ExistingAlternative[];
   readonly recurrenceStatus: ProblemRecurrenceStatus;
   readonly recurrenceNote: string;
   readonly evidenceAvailability: EvidenceAvailabilityState;
   readonly researchLimitations: readonly string[];
+  readonly unresolvedQuestions?: readonly string[];
+  readonly evidenceSummary?: ClusterEvidenceSummary | null;
+  readonly commercialRelevance?: CommercialRelevanceAssessment | null;
   readonly publicationStatus: ProblemPublicationStatus;
+  readonly reviewedBy?: string | null;
+  readonly reviewedAt?: string | null;
+  readonly reviewNotes?: string | null;
+  readonly approvedBy?: string | null;
+  readonly approvedAt?: string | null;
+  readonly publishedAt?: string | null;
+  readonly founderExceptionReason?: string | null;
+  readonly archivedAt?: string | null;
+  readonly archiveReason?: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly schemaVersion: number;
@@ -272,28 +361,37 @@ export type OpportunityEvaluationDocument = OpportunityEvaluation & {
 };
 
 /**
- * Logical schema for `publishedProblems` (reserved for future trusted backend publication).
- * Not populated in Milestone F2.
+ * Sanitized public projection for `publishedProblems`.
+ * Excludes internal reviewer notes, unverified personal data, and raw restricted excerpts.
  */
 export interface PublishedProblemDocument {
   readonly id: string;
   readonly slug: string;
   readonly title: string;
   readonly summary: string;
+  readonly categoryLabel?: string;
   readonly categories: readonly QuickExploreCategory[];
+  readonly illustration?: OpportunityIllustrationKey;
+  readonly tags?: readonly TrendingTopic[];
   readonly affectedAudience: readonly string[];
   readonly recurrenceNote: string;
   readonly isIllustrativeDemo: false;
   readonly publishedAt: string;
-  readonly publicationStatus: 'published';
+  readonly publicationStatus: 'published' | 'archived';
   readonly verifiedEvidenceCount: number;
+  readonly independentEvidenceCount?: number;
+  readonly sourceDiversityCount?: number;
   readonly sourceCoverage: number | null;
+  readonly geographicalCoverage?: readonly string[];
   readonly lastUpdated: string | null;
   readonly coverageNote: string;
+  readonly evidence: readonly EvidenceRecord[];
   readonly researchLimitations: readonly string[];
   readonly unknownsAndRisks: readonly string[];
   readonly insights: readonly ProblemInsight[];
   readonly existingAlternatives: readonly ExistingAlternative[];
+  readonly commercialRelevance?: CommercialRelevanceAssessment | null;
+  readonly founderExceptionNote?: string | null;
   readonly schemaVersion: number;
 }
 
@@ -372,6 +470,15 @@ export const FIRESTORE_ANTICIPATED_INDEXES: readonly AnticipatedFirestoreIndex[]
       { fieldPath: 'updatedAt', order: 'DESCENDING' },
     ],
     purpose: 'Editorial review queue ordering for draft and under_review clusters.',
+    deployedInMilestoneF2: false,
+  },
+  {
+    collection: 'publishedProblems',
+    fields: [
+      { fieldPath: 'publicationStatus', order: 'ASCENDING' },
+      { fieldPath: 'isIllustrativeDemo', order: 'ASCENDING' },
+    ],
+    purpose: 'Public read-only listing enforcing publicationStatus == published and isIllustrativeDemo == false.',
     deployedInMilestoneF2: false,
   },
   {

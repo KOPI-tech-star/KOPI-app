@@ -1,11 +1,13 @@
 rules_version = '2';
 
-// CANDIDATE RULESET FOR PROMPT #27 (Auth, User Accounts & Saved Opportunities)
+// CANDIDATE RULESET FOR PROMPT #28 (Auth, User Accounts, Saved Opportunities & Published Research)
 // NOT DEPLOYED AUTOMATICALLY.
-// Preserves Milestone F2 read-only restrictions on `demoProblems` and denies all
-// internal/reserved collections while adding owner-isolated rules for `users/{userId}`
-// and `users/{userId}/savedOpportunities/{problemId}`.
-// Requires executable rules verification (Firebase Emulator) or explicit founder
+// Preserves Milestone F2 read-only restrictions on `demoProblems`, owner-isolated
+// rules for `users/{userId}` and `users/{userId}/savedOpportunities/{problemId}`,
+// and denies all 6 internal research collections while allowing bounded public
+// read-only access (`get` and `limit <= 50` `list`) to `publishedProblems` where
+// `publicationStatus == 'published'` and `isIllustrativeDemo == false`.
+// Requires executable rules verification (Firebase Emulator) and explicit founder
 // approval before replacing `firestore.rules`.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -36,7 +38,12 @@ service cloud.firestore {
         'wet-entrance-monsoons',
         'student-nutrition-consistency',
         'excessive-small-delivery-packaging'
-      ] || exists(/databases/$(database)/documents/publishedProblems/$(problemId));
+      ] || (
+        isValidId(problemId)
+        && exists(/databases/$(database)/documents/publishedProblems/$(problemId))
+        && get(/databases/$(database)/documents/publishedProblems/$(problemId)).data.publicationStatus == 'published'
+        && get(/databases/$(database)/documents/publishedProblems/$(problemId)).data.isIllustrativeDemo == false
+      );
     }
 
     function isValidDisplayName(value) {
@@ -253,8 +260,22 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    match /publishedProblems/{docId=**} {
-      allow read, write: if false;
+    // =========================================================================
+    // Public Verified Research Read-Only Scope (Prompt #28 Candidate Rules)
+    // =========================================================================
+    match /publishedProblems/{problemId} {
+      allow get: if isValidId(problemId)
+        && resource != null
+        && resource.data.publicationStatus == 'published'
+        && resource.data.isIllustrativeDemo == false;
+
+      allow list: if resource != null
+        && resource.data.publicationStatus == 'published'
+        && resource.data.isIllustrativeDemo == false
+        && request.query.limit != null
+        && request.query.limit <= 50;
+
+      allow create, update, delete: if false;
     }
 
     // Default-deny catch-all for all other collections and nested paths.

@@ -1,28 +1,37 @@
-import { Info, ShieldAlert } from 'lucide-react';
+import { CheckCircle2, Info, ShieldAlert } from 'lucide-react';
 import type {
   EvaluationReadiness,
   OpportunityEvaluation,
 } from '../config/opportunityEvaluation';
+import type { Problem } from '../config/problemExplorer';
 import { BotanicalBranch } from './BotanicalBranch';
 
 interface EvaluationReadinessPanelProps {
   readiness: EvaluationReadiness;
   evaluation: OpportunityEvaluation;
+  problem?: Problem;
 }
 
 export function EvaluationReadinessPanel({
   readiness,
   evaluation,
+  problem,
 }: EvaluationReadinessPanelProps) {
+  const isVerifiedResearch =
+    Boolean(problem && !problem.isIllustrativeDemo) &&
+    readiness.status === 'evidence_supported';
+
   const statusHeading =
     readiness.status === 'insufficient_evidence'
       ? 'Insufficient Evidence'
       : readiness.status === 'preliminary_hypothesis'
         ? 'Preliminary Hypothesis Only'
-        : 'Evidence-Supported Review';
+        : 'Qualitative Commercial Review';
 
-  const statusExplanation =
-    readiness.status === 'insufficient_evidence'
+  const statusExplanation = isVerifiedResearch
+    ? (problem?.commercialRelevanceSummary ??
+      'Verified observations are connected and assessed qualitatively across seven commercial dimensions without numeric scoring.')
+    : readiness.status === 'insufficient_evidence'
       ? 'Not enough verified information is available to produce a reliable opportunity assessment.'
       : 'Verified observations are connected, though scoring remains uncomputed without an approved rubric.';
 
@@ -40,8 +49,18 @@ export function EvaluationReadinessPanel({
       <div className="relative z-10 flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-[#C65A1B]/30 bg-[#FFF2E5] px-3 py-1 font-dm-sans text-[0.75rem] font-semibold tracking-[0.04em] uppercase text-[#9E4310]">
-              <ShieldAlert size={13} strokeWidth={2.2} aria-hidden="true" />
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 font-dm-sans text-[0.75rem] font-semibold tracking-[0.04em] uppercase ${
+                isVerifiedResearch
+                  ? 'border-[#7A8463]/35 bg-[#7A8463]/14 text-[#3F4A2D]'
+                  : 'border-[#C65A1B]/30 bg-[#FFF2E5] text-[#9E4310]'
+              }`}
+            >
+              {isVerifiedResearch ? (
+                <CheckCircle2 size={13} strokeWidth={2.2} aria-hidden="true" />
+              ) : (
+                <ShieldAlert size={13} strokeWidth={2.2} aria-hidden="true" />
+              )}
               <span>{statusHeading}</span>
             </span>
           </div>
@@ -56,6 +75,16 @@ export function EvaluationReadinessPanel({
           <p className="font-dm-sans mt-1.5 max-w-[60ch] text-[0.9375rem] leading-relaxed text-[#402818]/88">
             {statusExplanation}
           </p>
+
+          {problem?.founderExceptionNote && (
+            <p
+              data-testid="evaluation-founder-exception-note"
+              className="font-dm-sans mt-2.5 rounded-lg border border-[#C65A1B]/25 bg-[#FAE8D7]/70 px-3 py-2 text-[0.8125rem] text-[#7B2D0C]"
+            >
+              <strong>Founder publication exception:</strong>{' '}
+              {problem.founderExceptionNote}
+            </p>
+          )}
 
           <p className="font-dm-sans mt-2.5 flex items-start gap-2 text-[0.8125rem] leading-relaxed text-[#705848]">
             <Info
@@ -83,7 +112,7 @@ export function EvaluationReadinessPanel({
             Not scored
           </p>
           <p className="font-dm-sans mt-1 text-[0.78rem] font-medium text-[#705848]">
-            Evaluation not scored
+            {isVerifiedResearch ? 'Qualitative review only' : 'Evaluation not scored'}
           </p>
           <dl className="mt-3.5 space-y-1.5 border-t border-[#402818]/10 pt-3 text-left text-[0.75rem]">
             <div className="flex items-baseline justify-between gap-3">
@@ -92,10 +121,18 @@ export function EvaluationReadinessPanel({
                 {readiness.verifiedEvidenceCount}
               </dd>
             </div>
+            {problem?.independentEvidenceCount !== undefined && (
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="font-dm-sans text-[#806957]">Independent records</dt>
+                <dd className="font-dm-sans shrink-0 font-semibold tabular-nums text-[#402818]">
+                  {problem.independentEvidenceCount}
+                </dd>
+              </div>
+            )}
             <div className="flex items-baseline justify-between gap-3">
               <dt className="font-dm-sans text-[#806957]">Methodology</dt>
               <dd className="font-dm-sans shrink-0 font-semibold text-[#402818]">
-                {evaluation.scoreMethodologyVersion ?? 'Not approved'}
+                {evaluation.scoreMethodologyVersion ?? 'Qualitative only'}
               </dd>
             </div>
           </dl>

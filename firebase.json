@@ -1,0 +1,8 @@
+{
+  "firestore": [
+    {
+      "database": "ai-studio-kopi-6863852d-35ae-4115-97d3-3fcc2fdd6372",
+      "rules": "firestore.rules"
+    }
+  ]
+}

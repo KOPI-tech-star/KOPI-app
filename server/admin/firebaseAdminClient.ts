@@ -67,6 +67,10 @@ export interface AdminFirestoreStore {
     collection: FirestoreCollectionName,
     documentId: string
   ): Promise<AdminDocumentSnapshot>;
+  listDocuments(
+    collection: FirestoreCollectionName,
+    options?: { readonly limit?: number }
+  ): Promise<readonly AdminDocumentSnapshot[]>;
   createDocument(
     collection: FirestoreCollectionName,
     documentId: string,
@@ -359,6 +363,26 @@ export function createFirebaseAdminFirestoreStore(
             ? (raw as Record<string, unknown>)
             : null,
       };
+    },
+
+    async listDocuments(collection, options = {}) {
+      const maxDocs =
+        typeof options.limit === 'number' && Number.isInteger(options.limit) && options.limit > 0
+          ? Math.min(options.limit, 1000)
+          : 500;
+      const snap = await db.collection(collection).limit(maxDocs).get();
+      return snap.docs.map((docSnap) => {
+        const raw = docSnap.data();
+        return {
+          exists: true,
+          id: docSnap.id,
+          updateTimeMs: docSnap.updateTime ? docSnap.updateTime.toMillis() : null,
+          data:
+            raw && typeof raw === 'object' && !Array.isArray(raw)
+              ? (raw as Record<string, unknown>)
+              : null,
+        };
+      });
     },
 
     async createDocument(collection, documentId, data) {

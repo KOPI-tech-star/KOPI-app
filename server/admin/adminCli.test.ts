@@ -93,6 +93,17 @@ function createInMemoryAdminStore(options: {
       };
     },
 
+    async listDocuments(collection, listOpts) {
+      const limit = listOpts?.limit ?? 1000;
+      const entries = Array.from(getCollMap(collection).entries()).slice(0, limit);
+      return entries.map(([id, entry]) => ({
+        exists: true,
+        id,
+        updateTimeMs: entry.updateTimeMs,
+        data: JSON.parse(JSON.stringify(entry.data)) as Record<string, unknown>,
+      }));
+    },
+
     async createDocument(collection, documentId, data) {
       const coll = getCollMap(collection);
       if (coll.has(documentId)) {

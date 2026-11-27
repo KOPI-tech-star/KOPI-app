@@ -21,6 +21,18 @@ export function EvaluationLimitationsSection({
     );
   }
 
+  if (problem.independentEvidenceCount !== undefined) {
+    limitationItems.push(
+      `${problem.independentEvidenceCount} independent verified record${problem.independentEvidenceCount === 1 ? '' : 's'} across ${problem.sourceDiversityCount ?? problem.evidenceCoverage.sourceCount ?? 1} distinct source${(problem.sourceDiversityCount ?? problem.evidenceCoverage.sourceCount ?? 1) === 1 ? '' : 's'}.`
+    );
+  }
+
+  if (problem.geographicalCoverage && problem.geographicalCoverage.length > 0) {
+    limitationItems.push(
+      `Geographical coverage observed: ${problem.geographicalCoverage.join(', ')}.`
+    );
+  }
+
   if (recurrenceUnavailable) {
     limitationItems.push('Recurrence has not been established.');
   } else {
@@ -29,13 +41,23 @@ export function EvaluationLimitationsSection({
 
   if (problem.evidenceCoverage.sourceCount === null) {
     limitationItems.push('Source coverage is unknown.');
-  } else {
+  } else if (problem.independentEvidenceCount === undefined) {
     limitationItems.push(
       `Reported source coverage count: ${problem.evidenceCoverage.sourceCount}.`
     );
   }
 
-  limitationItems.push('Commercial viability has not been validated.');
+  if (problem.researchLimitations && problem.researchLimitations.length > 0) {
+    for (const item of problem.researchLimitations) {
+      if (!limitationItems.includes(item)) {
+        limitationItems.push(item);
+      }
+    }
+  }
+
+  limitationItems.push(
+    'Commercial viability and numerical opportunity scoring remain unvalidated.'
+  );
 
   return (
     <section

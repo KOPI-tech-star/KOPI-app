@@ -2,8 +2,8 @@
 
 - **Target Firebase Project:** `gen-lang-client-0653252950`
 - **Target Named Firestore Database:** `ai-studio-kopi-6863852d-35ae-4115-97d3-3fcc2fdd6372`
-- **Candidate Rules File:** `firestore.candidate.rules`
-- **Active Deployed Ruleset:** `firestore.rules` (Milestone F2 read-only `demoProblems` — **unchanged until executable rules test verification & founder deployment approval**)
+- **Candidate Rules File:** `firestore.candidate.rules` (identical SHA-256 to deployed `firestore.rules`)
+- **Active Deployed Ruleset:** `firestore.rules` (Prompt #27 owner-isolated + Milestone F2 demo get-only ruleset, verified 9/9 in CI commit `3f5d6bf` and deployed via `fax.DeployRules`; previous Milestone F2 ruleset preserved at `archive/firestore.milestone-f2.rules`)
 
 ---
 

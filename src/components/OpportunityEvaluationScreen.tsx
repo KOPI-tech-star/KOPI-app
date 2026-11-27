@@ -101,7 +101,7 @@ function renderEvaluationContent(
         </p>
 
         <div className="mt-3.5 flex flex-wrap items-center gap-3">
-          {problem.isIllustrativeDemo && (
+          {problem.isIllustrativeDemo ? (
             <div
               data-testid="evaluation-demo-notice"
               className="inline-flex items-center gap-2 rounded-xl border border-[#402818]/14 bg-[#FAE8D7]/80 px-3.5 py-2 text-[0.8125rem] font-medium text-[#402818]"
@@ -113,6 +113,19 @@ function renderEvaluationContent(
                 className="shrink-0 text-[#C65A1B]"
               />
               <span>Illustrative demonstration problem — not verified research.</span>
+            </div>
+          ) : (
+            <div
+              data-testid="evaluation-verified-notice"
+              className="inline-flex items-center gap-2 rounded-xl border border-[#7A8463]/35 bg-[#7A8463]/14 px-3.5 py-2 text-[0.8125rem] font-medium text-[#3F4A2D]"
+            >
+              <Info
+                size={15}
+                strokeWidth={2}
+                aria-hidden="true"
+                className="shrink-0 text-[#4D573B]"
+              />
+              <span>Verified research — qualitative review without numeric scores.</span>
             </div>
           )}
 
@@ -200,10 +213,17 @@ function renderEvaluationContent(
       </section>
 
       {/* 4. Evaluation Readiness Overview */}
-      <EvaluationReadinessPanel readiness={readiness} evaluation={evaluation} />
+      <EvaluationReadinessPanel
+        readiness={readiness}
+        evaluation={evaluation}
+        problem={problem}
+      />
 
       {/* 5. Evaluation Dimensions */}
-      <EvaluationDimensionList dimensions={evaluation.dimensions} />
+      <EvaluationDimensionList
+        dimensions={evaluation.dimensions}
+        qualitativeDimensions={problem.commercialRelevanceDimensions}
+      />
 
       {/* 6. Risks and Unknowns */}
       <section

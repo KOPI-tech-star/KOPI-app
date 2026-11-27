@@ -133,9 +133,10 @@ export interface OpportunityCardItem {
   title: string;
   description: string;
   illustration: OpportunityIllustrationKey;
-  evidenceVolume: 'Not available';
-  opportunityScore: 'Not available';
-  isIllustrative: true;
+  evidenceVolume: string;
+  opportunityScore: 'Not available' | 'Qualitative review';
+  isIllustrative: boolean;
+  publishedAt?: string | null;
   tags: readonly TrendingTopic[];
 }
 

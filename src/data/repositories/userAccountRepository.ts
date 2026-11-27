@@ -20,7 +20,6 @@ import { buildFirestoreErrorInfo, OperationType } from '../../lib/firestoreError
 import {
   FIRESTORE_COLLECTION_NAMES,
   LEGAL_DOCUMENT_VERSIONS,
-  type ApprovedDemoProblemId,
   type SavedOpportunityDocument,
   type SavedOpportunitySourceScreen,
   type UserProfileDocument,
@@ -32,6 +31,7 @@ import {
   validateSavedOpportunityDocument,
   validateUserProfileDocument,
 } from '../firestoreValidation';
+import { getProblemRepository } from './firestoreProblemRepository';
 import { RepositoryError } from './problemRepository';
 
 export interface ConsentSubmissionInput {
@@ -245,12 +245,14 @@ export class FirestoreUserAccountRepository implements UserAccountRepository {
   private readonly store: FirestoreUserAccountStore;
   private readonly auth: Auth | null;
   private readonly timestampToken: () => unknown;
+  private readonly verifyPublishedProblemExists: (problemId: string) => Promise<boolean>;
 
   constructor(
     store: FirestoreUserAccountStore,
     options: {
       auth?: Auth | null;
       timestampToken?: () => unknown;
+      verifyPublishedProblemExists?: (problemId: string) => Promise<boolean>;
     } = {}
   ) {
     if (!store.databaseId || store.databaseId === '(default)') {
@@ -261,6 +263,8 @@ export class FirestoreUserAccountRepository implements UserAccountRepository {
     this.store = store;
     this.auth = options.auth === undefined ? firebaseAuth : options.auth;
     this.timestampToken = options.timestampToken ?? (() => serverTimestamp());
+    this.verifyPublishedProblemExists =
+      options.verifyPublishedProblemExists ?? (async () => false);
   }
 
   public getTargetInfo(): { readonly projectId: string; readonly databaseId: string } {
@@ -290,12 +294,28 @@ export class FirestoreUserAccountRepository implements UserAccountRepository {
     return trimmed;
   }
 
-  private assertApprovedProblemId(problemId: string): ApprovedDemoProblemId {
+  private assertValidProblemDocId(problemId: string): string {
     const trimmed = problemId.trim();
-    if (!isValidFirestoreDocId(trimmed) || !isApprovedDemoProblemId(trimmed)) {
+    if (!isValidFirestoreDocId(trimmed)) {
       throw new RepositoryError({
         code: 'invalid_id',
-        userMessage: 'Only approved demonstration problem identifiers can be bookmarked right now.',
+        userMessage: 'Invalid problem identifier.',
+        retryable: false,
+      });
+    }
+    return trimmed;
+  }
+
+  private async assertSaveableProblemId(problemId: string): Promise<string> {
+    const trimmed = this.assertValidProblemDocId(problemId);
+    if (isApprovedDemoProblemId(trimmed)) {
+      return trimmed;
+    }
+    const publishedExists = await this.verifyPublishedProblemExists(trimmed);
+    if (!publishedExists) {
+      throw new RepositoryError({
+        code: 'invalid_id',
+        userMessage: 'Only approved demonstration or published verified problems can be bookmarked.',
         retryable: false,
       });
     }
@@ -438,7 +458,9 @@ export class FirestoreUserAccountRepository implements UserAccountRepository {
 
     const items: SavedOpportunityDocument[] = [];
     for (const snap of docs) {
-      const validation = validateSavedOpportunityDocument(snap.id, snap.data());
+      const validation = validateSavedOpportunityDocument(snap.id, snap.data(), {
+        allowPublishedIds: true,
+      });
       if (validation.ok && validation.value) {
         items.push(validation.value);
       }
@@ -454,7 +476,7 @@ export class FirestoreUserAccountRepository implements UserAccountRepository {
     sourceScreen: SavedOpportunitySourceScreen
   ): Promise<{ readonly item: SavedOpportunityDocument; readonly alreadyExisted: boolean }> {
     const validUid = this.assertValidUid(uid);
-    const validProblemId = this.assertApprovedProblemId(problemId);
+    const validProblemId = await this.assertSaveableProblemId(problemId);
     const path = `${FIRESTORE_COLLECTION_NAMES.users}/${validUid}/savedOpportunities/${validProblemId}`;
 
     let existingSnap: FirestoreUserStoreSnapshot;
@@ -467,7 +489,8 @@ export class FirestoreUserAccountRepository implements UserAccountRepository {
     if (existingSnap.exists) {
       const validatedExisting = validateSavedOpportunityDocument(
         validProblemId,
-        existingSnap.data()
+        existingSnap.data(),
+        { allowPublishedIds: true }
       );
       if (validatedExisting.ok && validatedExisting.value) {
         return { item: validatedExisting.value, alreadyExisted: true };
@@ -496,7 +519,8 @@ export class FirestoreUserAccountRepository implements UserAccountRepository {
 
     const validation = validateSavedOpportunityDocument(
       validProblemId,
-      createdSnap.data()
+      createdSnap.data(),
+      { allowPublishedIds: true }
     );
     if (!validation.ok || !validation.value) {
       throw new RepositoryError({
@@ -512,7 +536,7 @@ export class FirestoreUserAccountRepository implements UserAccountRepository {
 
   public async removeSavedOpportunity(uid: string, problemId: string): Promise<void> {
     const validUid = this.assertValidUid(uid);
-    const validProblemId = this.assertApprovedProblemId(problemId);
+    const validProblemId = this.assertValidProblemDocId(problemId);
     const path = `${FIRESTORE_COLLECTION_NAMES.users}/${validUid}/savedOpportunities/${validProblemId}`;
 
     try {
@@ -529,7 +553,11 @@ export function getUserAccountRepository(): FirestoreUserAccountRepository {
   if (!defaultUserRepo) {
     defaultUserRepo = new FirestoreUserAccountRepository(
       createFirestoreUserAccountStore(),
-      { auth: firebaseAuth }
+      {
+        auth: firebaseAuth,
+        verifyPublishedProblemExists: async (problemId) =>
+          Boolean(await getProblemRepository().getProblemById(problemId)),
+      }
     );
   }
   return defaultUserRepo;

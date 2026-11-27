@@ -1,5 +1,5 @@
 /**
- * Firestore Security Rules Emulator Test Suite (Prompt #27 Candidate Rules)
+ * Firestore Security Rules Emulator Test Suite (Prompt #28 Candidate Rules)
  *
  * Target ruleset: firestore.candidate.rules
  * Isolated Emulator project ID: demo-kopi-rules-test
@@ -12,6 +12,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
 import {
   assertFails,
@@ -25,10 +26,13 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
+  query,
   serverTimestamp,
   setDoc,
   Timestamp,
   updateDoc,
+  where,
 } from 'firebase/firestore';
 
 const PROJECT_ID =
@@ -435,7 +439,7 @@ test('8. Saved opportunities enforce approved IDs, guest-migration safety, serve
   );
 });
 
-test('9. Internal research collections and unknown paths remain strictly inaccessible to authenticated users', async () => {
+test('9. Internal 6 research collections and unknown paths remain strictly inaccessible to authenticated users', async () => {
   const aliceDb = testEnv
     .authenticatedContext('alice', { email_verified: true })
     .firestore();
@@ -447,11 +451,176 @@ test('9. Internal research collections and unknown paths remain strictly inacces
     'evidenceLinks',
     'researchInsights',
     'opportunityEvaluations',
-    'publishedProblems',
     'unknownPrivateCollection',
   ]) {
     await assertFails(getDoc(doc(aliceDb, `${colName}/sample-doc`)));
     await assertFails(getDocs(collection(aliceDb, colName)));
     await assertFails(setDoc(doc(aliceDb, `${colName}/sample-doc`), { id: 'sample-doc' }));
   }
+});
+
+test('10. publishedProblems allows bounded public reads for published docs only, denies archived/draft/unbounded/writes, and authorizes bookmarks', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const adminDb = ctx.firestore();
+    await setDoc(doc(adminDb, 'publishedProblems/monsoon-drainage-delays'), {
+      id: 'monsoon-drainage-delays',
+      slug: 'monsoon-drainage-delays',
+      title: 'Monsoon drainage bottleneck in tier-2 retail corridors',
+      publicationStatus: 'published',
+      isIllustrativeDemo: false,
+    });
+    await setDoc(doc(adminDb, 'publishedProblems/archived-research-item'), {
+      id: 'archived-research-item',
+      slug: 'archived-research-item',
+      title: 'Archived problem',
+      publicationStatus: 'archived',
+      isIllustrativeDemo: false,
+    });
+    await setDoc(doc(adminDb, 'publishedProblems/draft-research-item'), {
+      id: 'draft-research-item',
+      slug: 'draft-research-item',
+      title: 'Draft leak',
+      publicationStatus: 'draft',
+      isIllustrativeDemo: false,
+    });
+    await setDoc(doc(adminDb, 'publishedProblems/fake-demo-flag'), {
+      id: 'fake-demo-flag',
+      slug: 'fake-demo-flag',
+      title: 'Improperly flagged demo',
+      publicationStatus: 'published',
+      isIllustrativeDemo: true,
+    });
+  });
+
+  const anonDb = testEnv.unauthenticatedContext().firestore();
+  const aliceDb = testEnv
+    .authenticatedContext('alice', { email_verified: true })
+    .firestore();
+
+  // Single-document get succeeds only for published + non-demo doc
+  await assertSucceeds(getDoc(doc(anonDb, 'publishedProblems/monsoon-drainage-delays')));
+  await assertFails(getDoc(doc(anonDb, 'publishedProblems/archived-research-item')));
+  await assertFails(getDoc(doc(anonDb, 'publishedProblems/draft-research-item')));
+  await assertFails(getDoc(doc(anonDb, 'publishedProblems/fake-demo-flag')));
+  await assertFails(getDoc(doc(anonDb, 'publishedProblems/nonexistent-id')));
+
+  // Bounded list with BOTH publicationStatus == 'published' AND isIllustrativeDemo == false and limit <= 50 (including boundary 50) succeeds
+  const listSnap = await assertSucceeds(
+    getDocs(
+      query(
+        collection(anonDb, 'publishedProblems'),
+        where('publicationStatus', '==', 'published'),
+        where('isIllustrativeDemo', '==', false),
+        limit(50)
+      )
+    )
+  );
+  assert.deepEqual(
+    listSnap.docs.map((d) => d.id),
+    ['monsoon-drainage-delays']
+  );
+
+  // List omitting isIllustrativeDemo == false MUST fail (prevents fake-demo-flag leakage)
+  await assertFails(
+    getDocs(
+      query(
+        collection(anonDb, 'publishedProblems'),
+        where('publicationStatus', '==', 'published'),
+        limit(20)
+      )
+    )
+  );
+
+  // List omitting publicationStatus == 'published' MUST fail (prevents draft/archived leakage)
+  await assertFails(
+    getDocs(
+      query(
+        collection(anonDb, 'publishedProblems'),
+        where('isIllustrativeDemo', '==', false),
+        limit(20)
+      )
+    )
+  );
+
+  // List querying isIllustrativeDemo == true MUST fail
+  await assertFails(
+    getDocs(
+      query(
+        collection(anonDb, 'publishedProblems'),
+        where('publicationStatus', '==', 'published'),
+        where('isIllustrativeDemo', '==', true),
+        limit(20)
+      )
+    )
+  );
+
+  // Unbounded, limit > 50, draft, and archived queries MUST fail
+  await assertFails(getDocs(collection(anonDb, 'publishedProblems')));
+  await assertFails(
+    getDocs(
+      query(
+        collection(anonDb, 'publishedProblems'),
+        where('publicationStatus', '==', 'published'),
+        where('isIllustrativeDemo', '==', false),
+        limit(51)
+      )
+    )
+  );
+  await assertFails(
+    getDocs(
+      query(
+        collection(anonDb, 'publishedProblems'),
+        where('publicationStatus', '==', 'archived'),
+        where('isIllustrativeDemo', '==', false),
+        limit(10)
+      )
+    )
+  );
+  await assertFails(
+    getDocs(
+      query(
+        collection(anonDb, 'publishedProblems'),
+        where('publicationStatus', '==', 'draft'),
+        where('isIllustrativeDemo', '==', false),
+        limit(10)
+      )
+    )
+  );
+
+  // All client writes to publishedProblems denied
+  await assertFails(
+    setDoc(doc(aliceDb, 'publishedProblems/monsoon-drainage-delays'), {
+      id: 'monsoon-drainage-delays',
+      publicationStatus: 'published',
+    })
+  );
+  await assertFails(
+    updateDoc(doc(aliceDb, 'publishedProblems/monsoon-drainage-delays'), {
+      title: 'Tampered',
+    })
+  );
+  await assertFails(
+    deleteDoc(doc(aliceDb, 'publishedProblems/monsoon-drainage-delays'))
+  );
+
+  // Authenticated onboarded user can bookmark a published problem, but NOT an archived/nonexistent one
+  await assertSucceeds(setDoc(doc(aliceDb, 'users/alice'), validUserPayload('alice')));
+  await assertSucceeds(
+    setDoc(
+      doc(aliceDb, 'users/alice/savedOpportunities/monsoon-drainage-delays'),
+      validSavedPayload('monsoon-drainage-delays', 'problem-investigation')
+    )
+  );
+  await assertFails(
+    setDoc(
+      doc(aliceDb, 'users/alice/savedOpportunities/archived-research-item'),
+      validSavedPayload('archived-research-item', 'problem-investigation')
+    )
+  );
+  await assertFails(
+    setDoc(
+      doc(aliceDb, 'users/alice/savedOpportunities/nonexistent-published-id'),
+      validSavedPayload('nonexistent-published-id', 'problem-investigation')
+    )
+  );
 });

@@ -13,6 +13,8 @@ export type RepositoryErrorCode =
   | 'invalid_id'
   | 'unknown';
 
+export type PublishedFeedStatus = 'loaded' | 'rules_pending' | 'empty';
+
 export class RepositoryError extends Error {
   public readonly code: RepositoryErrorCode;
   public readonly userMessage: string;
@@ -41,6 +43,20 @@ export interface DemoProblemBundle {
   readonly source: 'firestore';
 }
 
+export interface CombinedProblemFeedBundle {
+  readonly problems: readonly Problem[];
+  readonly publishedProblems: readonly Problem[];
+  readonly demoProblems: readonly Problem[];
+  readonly opportunities: readonly OpportunityCardItem[];
+  readonly illustrationByProblemId: Readonly<Record<string, OpportunityIllustrationKey>>;
+  readonly missingIds: readonly string[];
+  readonly publishedCount: number;
+  readonly demoCount: number;
+  readonly publishedStatus: PublishedFeedStatus;
+  readonly retrievedAt: string;
+  readonly source: 'firestore';
+}
+
 export interface SingleDemoProblemResult {
   readonly problem: Problem;
   readonly opportunity: OpportunityCardItem;
@@ -55,6 +71,10 @@ export interface RepositoryReadOptions {
 
 export interface ProblemRepository {
   getApprovedDemoProblems(options?: RepositoryReadOptions): Promise<DemoProblemBundle>;
+  getPublishedProblems?(options?: RepositoryReadOptions): Promise<DemoProblemBundle>;
+  getCombinedProblemFeed?(
+    options?: RepositoryReadOptions
+  ): Promise<CombinedProblemFeedBundle>;
   getProblemById(
     problemId: string,
     options?: RepositoryReadOptions

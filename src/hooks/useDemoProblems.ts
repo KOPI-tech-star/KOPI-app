@@ -8,8 +8,9 @@ import { PROBLEM_RECORDS, type Problem } from '../config/problemExplorer';
 import { getProblemRepository } from '../data/repositories/firestoreProblemRepository';
 import {
   RepositoryError,
-  type DemoProblemBundle,
+  type CombinedProblemFeedBundle,
   type ProblemRepository,
+  type PublishedFeedStatus,
   type RepositoryErrorCode,
   type SingleDemoProblemResult,
 } from '../data/repositories/problemRepository';
@@ -20,9 +21,14 @@ export type DemoProblemLoadStatus = 'loading' | 'success' | 'not_found' | 'error
 export interface DemoProblemsHookState {
   readonly status: DemoCollectionLoadStatus;
   readonly problems: readonly Problem[];
+  readonly publishedProblems: readonly Problem[];
+  readonly demoProblems: readonly Problem[];
   readonly opportunities: readonly OpportunityCardItem[];
   readonly illustrationByProblemId: Readonly<Record<string, OpportunityIllustrationKey>>;
   readonly missingIds: readonly string[];
+  readonly publishedCount: number;
+  readonly demoCount: number;
+  readonly publishedStatus: PublishedFeedStatus;
   readonly errorCode: RepositoryErrorCode | null;
   readonly errorMessage: string | null;
   readonly isDevOfflineFixture: boolean;
@@ -51,16 +57,21 @@ function isDevOfflineFixtureRequested(): boolean {
   }
 }
 
-function buildDevOfflineBundle(): DemoProblemBundle {
+function buildDevOfflineBundle(): CombinedProblemFeedBundle {
   const illustrationByProblemId: Record<string, OpportunityIllustrationKey> = {};
   for (const opp of DEMO_OPPORTUNITIES) {
     illustrationByProblemId[opp.id] = opp.illustration;
   }
   return {
     problems: PROBLEM_RECORDS,
+    publishedProblems: [],
+    demoProblems: PROBLEM_RECORDS,
     opportunities: DEMO_OPPORTUNITIES,
     illustrationByProblemId,
     missingIds: [],
+    publishedCount: 0,
+    demoCount: PROBLEM_RECORDS.length,
+    publishedStatus: 'empty',
     retrievedAt: new Date().toISOString(),
     source: 'firestore',
   };
@@ -77,9 +88,14 @@ export function useDemoProblems(
       return {
         status: 'success',
         problems: bundle.problems,
+        publishedProblems: bundle.publishedProblems,
+        demoProblems: bundle.demoProblems,
         opportunities: bundle.opportunities,
         illustrationByProblemId: bundle.illustrationByProblemId,
         missingIds: [],
+        publishedCount: 0,
+        demoCount: bundle.demoCount,
+        publishedStatus: 'empty',
         errorCode: null,
         errorMessage: null,
         isDevOfflineFixture: true,
@@ -89,9 +105,14 @@ export function useDemoProblems(
     return {
       status: 'loading',
       problems: [],
+      publishedProblems: [],
+      demoProblems: [],
       opportunities: [],
       illustrationByProblemId: {},
       missingIds: [],
+      publishedCount: 0,
+      demoCount: 0,
+      publishedStatus: 'empty',
       errorCode: null,
       errorMessage: null,
       isDevOfflineFixture: false,
@@ -111,16 +132,40 @@ export function useDemoProblems(
       errorMessage: null,
     }));
 
-    repository
-      .getApprovedDemoProblems({ forceRefresh: reloadNonce > 0 })
+    const loadFeed = repository.getCombinedProblemFeed
+      ? repository.getCombinedProblemFeed({ forceRefresh: reloadNonce > 0 })
+      : repository
+          .getApprovedDemoProblems({ forceRefresh: reloadNonce > 0 })
+          .then(
+            (demoBundle): CombinedProblemFeedBundle => ({
+              problems: demoBundle.problems,
+              publishedProblems: [],
+              demoProblems: demoBundle.problems,
+              opportunities: demoBundle.opportunities,
+              illustrationByProblemId: demoBundle.illustrationByProblemId,
+              missingIds: demoBundle.missingIds,
+              publishedCount: 0,
+              demoCount: demoBundle.problems.length,
+              publishedStatus: 'empty',
+              retrievedAt: demoBundle.retrievedAt,
+              source: 'firestore',
+            })
+          );
+
+    loadFeed
       .then((bundle) => {
         if (cancelled) return;
         setState({
           status: bundle.problems.length > 0 ? 'success' : 'empty',
           problems: bundle.problems,
+          publishedProblems: bundle.publishedProblems,
+          demoProblems: bundle.demoProblems,
           opportunities: bundle.opportunities,
           illustrationByProblemId: bundle.illustrationByProblemId,
           missingIds: bundle.missingIds,
+          publishedCount: bundle.publishedCount,
+          demoCount: bundle.demoCount,
+          publishedStatus: bundle.publishedStatus,
           errorCode: null,
           errorMessage: null,
           isDevOfflineFixture: false,
@@ -134,15 +179,20 @@ export function useDemoProblems(
             : new RepositoryError({
                 code: 'unknown',
                 userMessage:
-                  'Unable to load demonstration problems from Firestore right now.',
+                  'Unable to load problems from Firestore right now.',
                 retryable: true,
               });
         setState({
           status: 'error',
           problems: [],
+          publishedProblems: [],
+          demoProblems: [],
           opportunities: [],
           illustrationByProblemId: {},
           missingIds: [],
+          publishedCount: 0,
+          demoCount: 0,
+          publishedStatus: 'empty',
           errorCode: repoErr.code,
           errorMessage: repoErr.userMessage,
           isDevOfflineFixture: false,

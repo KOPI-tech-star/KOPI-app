@@ -41,6 +41,7 @@ const PROBLEM_ILLUSTRATION_MAP: Record<string, OpportunityIllustrationKey> = {
 
 function renderInvestigationBody(
   problem: Problem,
+  illustrationFromRepo: OpportunityIllustrationKey | null,
   onEvaluateOpportunity: (p: Problem) => void,
   bookmarkState: {
     isSaved: boolean;
@@ -48,7 +49,8 @@ function renderInvestigationBody(
     onToggle: (p: Problem) => void;
   }
 ) {
-  const illustrationKey = PROBLEM_ILLUSTRATION_MAP[problem.id];
+  const illustrationKey =
+    illustrationFromRepo ?? PROBLEM_ILLUSTRATION_MAP[problem.id];
   const validEvidenceIds = new Set(problem.evidence.map((e) => e.id));
 
   // Enforce evidence-attribution rule in UI: evidence_backed insights require valid local evidence IDs
@@ -108,7 +110,7 @@ function renderInvestigationBody(
             </p>
 
             <div className="mt-4 flex flex-wrap items-center gap-3">
-              {problem.isIllustrativeDemo && (
+              {problem.isIllustrativeDemo ? (
                 <div
                   data-testid="investigation-demo-notice"
                   className="inline-flex items-center gap-2 rounded-xl border border-[#402818]/14 bg-[#FAE8D7]/80 px-3.5 py-2 text-[0.8125rem] font-medium text-[#402818]"
@@ -120,6 +122,24 @@ function renderInvestigationBody(
                     className="shrink-0 text-[#C65A1B]"
                   />
                   <span>Illustrative problem — not verified research.</span>
+                </div>
+              ) : (
+                <div
+                  data-testid="investigation-verified-notice"
+                  className="inline-flex items-center gap-2 rounded-xl border border-[#7A8463]/35 bg-[#7A8463]/14 px-3.5 py-2 text-[0.8125rem] font-medium text-[#3F4A2D]"
+                >
+                  <Info
+                    size={15}
+                    strokeWidth={2}
+                    aria-hidden="true"
+                    className="shrink-0 text-[#4D573B]"
+                  />
+                  <span>
+                    Verified research
+                    {problem.publishedAt
+                      ? ` · Published ${new Date(problem.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                      : ''}
+                  </span>
                 </div>
               )}
 
@@ -255,32 +275,76 @@ function renderInvestigationBody(
             </dl>
           </div>
         ) : (
-          <div className="mt-3 rounded-xl border border-[#402818]/12 bg-[#FFF9F3] p-5">
+          <div className="mt-3 space-y-4 rounded-xl border border-[#402818]/12 bg-[#FFF9F3] p-5">
+            {problem.founderExceptionNote && (
+              <div
+                data-testid="investigation-founder-exception-note"
+                className="rounded-lg border border-[#C65A1B]/25 bg-[#FAE8D7]/70 px-3.5 py-2.5 font-dm-sans text-[0.8125rem] text-[#7B2D0C]"
+              >
+                <strong>Published under founder exception:</strong>{' '}
+                {problem.founderExceptionNote}
+              </div>
+            )}
+
             <p className="font-dm-sans text-[0.875rem] leading-relaxed text-[#402818]">
               {problem.evidenceCoverage.coverageNote}
             </p>
-            <dl className="mt-4 grid grid-cols-1 gap-3 border-t border-[#402818]/10 pt-3.5 text-[0.8125rem] sm:grid-cols-3">
-              <div>
-                <dt className="font-dm-sans text-[#806957]">Sources</dt>
-                <dd className="font-dm-sans mt-0.5 font-semibold text-[#402818]">
-                  {problem.evidenceCoverage.sourceCount ?? 'Unknown'}
-                </dd>
-              </div>
+            <dl className="grid grid-cols-1 gap-3 border-t border-[#402818]/10 pt-3.5 text-[0.8125rem] sm:grid-cols-2 lg:grid-cols-4">
               <div>
                 <dt className="font-dm-sans text-[#806957]">
-                  Verified records
+                  Verified observations
                 </dt>
                 <dd className="font-dm-sans mt-0.5 font-semibold text-[#402818]">
                   {problem.evidenceCoverage.verifiedCount}
                 </dd>
               </div>
               <div>
-                <dt className="font-dm-sans text-[#806957]">Last updated</dt>
+                <dt className="font-dm-sans text-[#806957]">
+                  Independent records
+                </dt>
                 <dd className="font-dm-sans mt-0.5 font-semibold text-[#402818]">
-                  {problem.evidenceCoverage.lastUpdated ?? 'Not available'}
+                  {problem.independentEvidenceCount ?? 'Not tracked'}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-dm-sans text-[#806957]">Distinct sources</dt>
+                <dd className="font-dm-sans mt-0.5 font-semibold text-[#402818]">
+                  {problem.sourceDiversityCount ??
+                    problem.evidenceCoverage.sourceCount ??
+                    'Unknown'}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-dm-sans text-[#806957]">
+                  Geographical coverage
+                </dt>
+                <dd className="font-dm-sans mt-0.5 font-semibold text-[#402818]">
+                  {problem.geographicalCoverage &&
+                  problem.geographicalCoverage.length > 0
+                    ? problem.geographicalCoverage.join(', ')
+                    : 'Not established'}
                 </dd>
               </div>
             </dl>
+
+            {problem.researchLimitations &&
+              problem.researchLimitations.length > 0 && (
+                <div className="border-t border-[#402818]/10 pt-3.5">
+                  <h3 className="font-dm-sans text-[0.75rem] font-semibold tracking-[0.06em] uppercase text-[#705848]">
+                    Research Limitations
+                  </h3>
+                  <ul className="mt-1.5 space-y-1">
+                    {problem.researchLimitations.map((lim) => (
+                      <li
+                        key={lim}
+                        className="font-dm-sans text-[0.84375rem] leading-relaxed text-[#705848]"
+                      >
+                        • {lim}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
           </div>
         )}
       </section>
@@ -504,6 +568,7 @@ export function ProblemInvestigationView({
   const {
     status: loadStatus,
     problem,
+    illustration,
     errorCode,
     errorMessage,
     isDevOfflineFixture,
@@ -654,7 +719,7 @@ export function ProblemInvestigationView({
               onSecondaryAction={onBackToExplorer}
             />
           ) : problem ? (
-            renderInvestigationBody(problem, handleEvaluateOpportunity, {
+            renderInvestigationBody(problem, illustration, handleEvaluateOpportunity, {
               isSaved: isProblemSaved(problem.id),
               isSaving: savingProblemIds.includes(problem.id),
               onToggle: (target) =>

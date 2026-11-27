@@ -62,7 +62,10 @@ export function ProblemExplorerDirectory({
   const {
     status: loadStatus,
     problems,
+    illustrationByProblemId,
     missingIds,
+    publishedCount,
+    demoCount,
     errorCode,
     errorMessage,
     isDevOfflineFixture,
@@ -218,8 +221,9 @@ export function ProblemExplorerDirectory({
                 className="shrink-0 text-[#C65A1B]"
               />
               <span>
-                Illustrative examples — live evidence collection is not connected
-                yet.
+                {publishedCount > 0
+                  ? `Showing ${publishedCount} verified research problem${publishedCount === 1 ? '' : 's'} alongside ${demoCount} illustrative example${demoCount === 1 ? '' : 's'}.`
+                  : 'Illustrative examples — live evidence collection is not connected yet.'}
               </span>
             </p>
           </section>
@@ -268,10 +272,12 @@ export function ProblemExplorerDirectory({
             <div className="mb-3 flex items-center justify-between text-[0.8125rem] text-[#705848]">
               <span data-testid="explorer-results-count" className="font-dm-sans">
                 {loadStatus === 'loading'
-                  ? 'Loading demonstration problems...'
+                  ? 'Loading problems from Firestore...'
                   : loadStatus === 'success'
-                    ? `Showing ${visibleProblems.length} of ${problems.length} illustrative problem${problems.length === 1 ? '' : 's'}`
-                    : '0 illustrative problems loaded'}
+                    ? publishedCount > 0
+                      ? `Showing ${visibleProblems.length} of ${problems.length} problem${problems.length === 1 ? '' : 's'} (${publishedCount} verified, ${demoCount} illustrative)`
+                      : `Showing ${visibleProblems.length} of ${problems.length} illustrative problem${problems.length === 1 ? '' : 's'}`
+                    : '0 problems loaded'}
               </span>
             </div>
 
@@ -297,6 +303,7 @@ export function ProblemExplorerDirectory({
                   <ExplorerProblemCard
                     key={problem.id}
                     problem={problem}
+                    illustration={illustrationByProblemId[problem.id]}
                     onInvestigate={handleInvestigateProblem}
                     isSaved={isProblemSaved(problem.id)}
                     isSaving={savingProblemIds.includes(problem.id)}

@@ -197,15 +197,51 @@ test('7 & 8. Firebase initialization triggers zero Firestore operations and zero
   }
 });
 
-test('9. Deployed Milestone F2 Firestore Security Rules enforce narrow get-only demo access and blueprint matches Prompt #27 schema', () => {
+test('9. Deployed Prompt #27 rules stay locked until approved, Prompt #28 candidate rules enforce bounded publishedProblems access, and blueprint syncs', () => {
   const rules = fs.readFileSync(path.join(ROOT_DIR, 'firestore.rules'), 'utf8');
+  const candidateRules = fs.readFileSync(
+    path.join(ROOT_DIR, 'firestore.candidate.rules'),
+    'utf8'
+  );
+  assert.notEqual(rules, candidateRules);
+
+  // Deployed rules remain unchanged at Prompt #27 state
   assert.match(rules, /rules_version\s*=\s*'2'/);
   assert.match(rules, /match\s+\/demoProblems\/\{problemId\}/);
   assert.match(rules, /allow\s+get:\s+if\s+problemId\s+in\s+\[/);
   assert.match(rules, /allow\s+list,\s*create,\s*update,\s*delete:\s*if\s+false;/);
+  assert.match(rules, /match\s+\/users\/\{userId\}/);
+  assert.match(rules, /isVerifiedOwner\(userId\)/);
+  assert.match(rules, /hasCompletedOnboardingProfile\(userId\)/);
+  assert.match(
+    rules,
+    /match\s+\/publishedProblems\/\{docId=\*\*\}[\s\S]*?allow\s+read,\s*write:\s*if\s+false;/
+  );
   assert.match(rules, /match\s+\/\{document=\*\*\}\s*\{\s*allow\s+read,\s*write:\s*if\s+false;/);
   assert.doesNotMatch(rules, /allow\s+read,\s*write:\s*if\s+true/);
-  assert.doesNotMatch(rules, /if\s+request\.auth\s*!=\s*null/);
+  assert.doesNotMatch(rules, /allow\s+get,\s*list:\s*if\s+isAuthenticated\(\)/);
+
+  // Candidate rules add bounded read-only publishedProblems access while locking writes & internal collections
+  assert.match(candidateRules, /match\s+\/publishedProblems\/\{problemId\}/);
+  assert.match(candidateRules, /resource\.data\.publicationStatus\s*==\s*'published'/);
+  assert.match(candidateRules, /resource\.data\.isIllustrativeDemo\s*==\s*false/);
+  assert.match(candidateRules, /request\.query\.limit\s*<=\s*50/);
+  assert.match(candidateRules, /allow\s+create,\s*update,\s*delete:\s*if\s+false;/);
+  assert.doesNotMatch(candidateRules, /allow\s+read,\s*write:\s*if\s+true/);
+
+  const firebaseJson = JSON.parse(
+    fs.readFileSync(path.join(ROOT_DIR, 'firebase.json'), 'utf8')
+  ) as { firestore?: Array<{ database?: string; rules?: string }> };
+  assert.ok(Array.isArray(firebaseJson.firestore));
+  assert.equal(firebaseJson.firestore.length, 1);
+  assert.deepEqual(firebaseJson.firestore[0], {
+    database: 'ai-studio-kopi-6863852d-35ae-4115-97d3-3fcc2fdd6372',
+    rules: 'firestore.rules',
+  });
+  assert.equal(
+    firebaseJson.firestore.some((entry) => entry.database === '(default)'),
+    false
+  );
 
   const blueprint = JSON.parse(
     fs.readFileSync(path.join(ROOT_DIR, 'firebase-blueprint.json'), 'utf8')
@@ -216,19 +252,24 @@ test('9. Deployed Milestone F2 Firestore Security Rules enforce narrow get-only 
 
   assert.deepEqual(Object.keys(blueprint.entities).sort(), [
     'DemoProblem',
+    'PublishedProblem',
     'SavedOpportunity',
     'UserProfile',
   ]);
   assert.deepEqual(Object.keys(blueprint.firestore).sort(), [
     '/demoProblems/{problemId}',
+    '/publishedProblems/{problemId}',
     '/users/{userId}',
     '/users/{userId}/savedOpportunities/{problemId}',
   ]);
   assert.equal(blueprint.firestore['/demoProblems/{problemId}']?.schema, 'DemoProblem');
+  assert.equal(
+    blueprint.firestore['/publishedProblems/{problemId}']?.schema,
+    'PublishedProblem'
+  );
   assert.equal(blueprint.firestore['/users/{userId}']?.schema, 'UserProfile');
   assert.equal(
     blueprint.firestore['/users/{userId}/savedOpportunities/{problemId}']?.schema,
     'SavedOpportunity'
   );
-  assert.ok(!('publishedProblems' in blueprint.firestore));
 });

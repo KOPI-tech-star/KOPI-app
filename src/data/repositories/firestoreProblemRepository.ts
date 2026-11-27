@@ -1,4 +1,13 @@
-import { doc, getDoc, type Firestore } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  limit,
+  query,
+  where,
+  type Firestore,
+} from 'firebase/firestore';
 import type {
   OpportunityCardItem,
   OpportunityIllustrationKey,
@@ -16,14 +25,18 @@ import {
 } from '../firestoreContracts';
 import {
   adaptValidatedDemoProblem,
+  adaptValidatedPublishedProblem,
   isApprovedDemoProblemId,
   isValidFirestoreDocId,
   validateDemoProblemDocument,
+  validatePublishedProblemDocument,
 } from '../firestoreValidation';
 import {
   RepositoryError,
+  type CombinedProblemFeedBundle,
   type DemoProblemBundle,
   type ProblemRepository,
+  type PublishedFeedStatus,
   type RepositoryReadOptions,
   type SingleDemoProblemResult,
 } from './problemRepository';
@@ -41,17 +54,18 @@ export interface FirestoreDocReader {
     collectionName: string,
     documentId: string
   ): Promise<FirestoreDocSnapshotLike>;
+  queryPublishedProblems?(maxLimit?: number): Promise<readonly FirestoreDocSnapshotLike[]>;
 }
 
 const SAFE_ERROR_MESSAGES = {
   permission_denied:
-    'Access to Firestore demonstration records is currently blocked by Security Rules. No unverified local fallback has been substituted.',
+    'Access to Firestore records is currently blocked by Security Rules. No unverified local fallback has been substituted.',
   unavailable:
     'Unable to reach the Cloud Firestore database right now. Check your network connection and retry.',
   invalid_record:
     'A retrieved Firestore document failed runtime data-integrity validation and was withheld.',
   invalid_id: 'The requested problem identifier is invalid.',
-  not_found: 'The requested demonstration document does not exist in Firestore.',
+  not_found: 'The requested problem document does not exist in Firestore.',
   unknown:
     'An unexpected error occurred while reading from Cloud Firestore. Please retry.',
 } as const;
@@ -132,6 +146,21 @@ export function createFirestoreSdkDocReader(
         data: () => snap.data(),
       };
     },
+    async queryPublishedProblems(maxLimit = 50) {
+      const clampedLimit = Math.max(1, Math.min(50, Math.floor(maxLimit)));
+      const q = query(
+        collection(db, FIRESTORE_COLLECTION_NAMES.publishedProblems),
+        where('publicationStatus', '==', 'published'),
+        where('isIllustrativeDemo', '==', false),
+        limit(clampedLimit)
+      );
+      const snap = await getDocs(q);
+      return snap.docs.map((d) => ({
+        exists: true,
+        id: d.id,
+        data: () => d.data(),
+      }));
+    },
   };
 }
 
@@ -139,9 +168,11 @@ export class FirestoreProblemRepository implements ProblemRepository {
   private readonly reader: FirestoreDocReader;
   private bundleCache: DemoProblemBundle | null = null;
   private bundleInFlight: Promise<DemoProblemBundle> | null = null;
-  private readonly singleCache = new Map<ApprovedDemoProblemId, SingleDemoProblemResult | null>();
+  private publishedCache: DemoProblemBundle | null = null;
+  private publishedInFlight: Promise<DemoProblemBundle> | null = null;
+  private readonly singleCache = new Map<string, SingleDemoProblemResult | null>();
   private readonly singleInFlight = new Map<
-    ApprovedDemoProblemId,
+    string,
     Promise<SingleDemoProblemResult | null>
   >();
 
@@ -164,6 +195,8 @@ export class FirestoreProblemRepository implements ProblemRepository {
   public clearCache(): void {
     this.bundleCache = null;
     this.bundleInFlight = null;
+    this.publishedCache = null;
+    this.publishedInFlight = null;
     this.singleCache.clear();
     this.singleInFlight.clear();
   }
@@ -195,15 +228,49 @@ export class FirestoreProblemRepository implements ProblemRepository {
     }
 
     const adapted = adaptValidatedDemoProblem(validation.value);
-    const result: SingleDemoProblemResult = {
+    return {
       problem: adapted.problem,
       opportunity: adapted.opportunity,
       illustration: adapted.illustration,
       retrievedAt: new Date().toISOString(),
       source: 'firestore',
     };
+  }
 
-    return result;
+  private async fetchSinglePublishedDoc(
+    problemId: string
+  ): Promise<SingleDemoProblemResult | null> {
+    let snapshot: FirestoreDocSnapshotLike;
+    try {
+      snapshot = await this.reader.readDocument(
+        FIRESTORE_COLLECTION_NAMES.publishedProblems,
+        problemId
+      );
+    } catch (err) {
+      throw mapUnknownFirestoreError(err);
+    }
+
+    if (!snapshot.exists) {
+      return null;
+    }
+
+    const validation = validatePublishedProblemDocument(problemId, snapshot.data());
+    if (!validation.ok || !validation.value) {
+      throw new RepositoryError({
+        code: 'invalid_record',
+        userMessage: SAFE_ERROR_MESSAGES.invalid_record,
+        retryable: false,
+      });
+    }
+
+    const adapted = adaptValidatedPublishedProblem(validation.value);
+    return {
+      problem: adapted.problem,
+      opportunity: adapted.opportunity,
+      illustration: adapted.illustration,
+      retrievedAt: new Date().toISOString(),
+      source: 'firestore',
+    };
   }
 
   public async getApprovedDemoProblems(
@@ -268,25 +335,182 @@ export class FirestoreProblemRepository implements ProblemRepository {
     }
   }
 
+  public async getPublishedProblems(
+    options: RepositoryReadOptions = {}
+  ): Promise<DemoProblemBundle> {
+    if (options.forceRefresh) {
+      this.publishedCache = null;
+      this.publishedInFlight = null;
+    }
+
+    if (this.publishedCache) {
+      return this.publishedCache;
+    }
+
+    if (this.publishedInFlight) {
+      return this.publishedInFlight;
+    }
+
+    if (!this.reader.queryPublishedProblems) {
+      const emptyBundle: DemoProblemBundle = {
+        problems: [],
+        opportunities: [],
+        illustrationByProblemId: {},
+        missingIds: [],
+        retrievedAt: new Date().toISOString(),
+        source: 'firestore',
+      };
+      this.publishedCache = emptyBundle;
+      return emptyBundle;
+    }
+
+    const loadPromise = (async (): Promise<DemoProblemBundle> => {
+      let snapshots: readonly FirestoreDocSnapshotLike[];
+      try {
+        snapshots = await this.reader.queryPublishedProblems!(50);
+      } catch (err) {
+        throw mapUnknownFirestoreError(err);
+      }
+
+      const adaptedEntries: Array<{
+        publishedAtMs: number;
+        result: SingleDemoProblemResult;
+      }> = [];
+
+      const retrievedAt = new Date().toISOString();
+      for (const snap of snapshots) {
+        if (!snap.exists) continue;
+        const validation = validatePublishedProblemDocument(snap.id, snap.data());
+        if (!validation.ok || !validation.value) {
+          continue;
+        }
+        const adapted = adaptValidatedPublishedProblem(validation.value);
+        const result: SingleDemoProblemResult = {
+          problem: adapted.problem,
+          opportunity: adapted.opportunity,
+          illustration: adapted.illustration,
+          retrievedAt,
+          source: 'firestore',
+        };
+        this.singleCache.set(snap.id, result);
+        adaptedEntries.push({
+          publishedAtMs: Date.parse(validation.value.publishedAt) || 0,
+          result,
+        });
+      }
+
+      adaptedEntries.sort((a, b) => b.publishedAtMs - a.publishedAtMs);
+
+      const problems: Problem[] = [];
+      const opportunities: OpportunityCardItem[] = [];
+      const illustrationByProblemId: Record<string, OpportunityIllustrationKey> = {};
+
+      for (const entry of adaptedEntries) {
+        problems.push(entry.result.problem);
+        opportunities.push(entry.result.opportunity);
+        illustrationByProblemId[entry.result.problem.id] = entry.result.illustration;
+      }
+
+      const bundle: DemoProblemBundle = {
+        problems,
+        opportunities,
+        illustrationByProblemId,
+        missingIds: [],
+        retrievedAt,
+        source: 'firestore',
+      };
+
+      this.publishedCache = bundle;
+      return bundle;
+    })();
+
+    this.publishedInFlight = loadPromise;
+    try {
+      return await loadPromise;
+    } finally {
+      if (this.publishedInFlight === loadPromise) {
+        this.publishedInFlight = null;
+      }
+    }
+  }
+
+  public async getCombinedProblemFeed(
+    options: RepositoryReadOptions = {}
+  ): Promise<CombinedProblemFeedBundle> {
+    if (options.forceRefresh) {
+      this.clearCache();
+    }
+
+    const demoBundle = await this.getApprovedDemoProblems();
+
+    let publishedBundle: DemoProblemBundle = {
+      problems: [],
+      opportunities: [],
+      illustrationByProblemId: {},
+      missingIds: [],
+      retrievedAt: demoBundle.retrievedAt,
+      source: 'firestore',
+    };
+    let publishedStatus: PublishedFeedStatus = 'empty';
+
+    try {
+      publishedBundle = await this.getPublishedProblems();
+      publishedStatus = publishedBundle.problems.length > 0 ? 'loaded' : 'empty';
+    } catch (err) {
+      if (err instanceof RepositoryError && err.code === 'permission_denied') {
+        // Deployed pre-Prompt-28 Security Rules may still lock publishedProblems
+        // until CI emulator verification & founder deployment approval.
+        publishedStatus = 'rules_pending';
+      } else {
+        throw err;
+      }
+    }
+
+    const problems = [...publishedBundle.problems, ...demoBundle.problems];
+    const opportunities = [
+      ...publishedBundle.opportunities,
+      ...demoBundle.opportunities,
+    ];
+    const illustrationByProblemId: Record<string, OpportunityIllustrationKey> = {
+      ...demoBundle.illustrationByProblemId,
+      ...publishedBundle.illustrationByProblemId,
+    };
+
+    return {
+      problems,
+      publishedProblems: publishedBundle.problems,
+      demoProblems: demoBundle.problems,
+      opportunities,
+      illustrationByProblemId,
+      missingIds: demoBundle.missingIds,
+      publishedCount: publishedBundle.problems.length,
+      demoCount: demoBundle.problems.length,
+      publishedStatus,
+      retrievedAt: demoBundle.retrievedAt,
+      source: 'firestore',
+    };
+  }
+
   public async getProblemById(
     problemId: string,
     options: RepositoryReadOptions = {}
   ): Promise<SingleDemoProblemResult | null> {
     const trimmed = problemId.trim();
-    if (!trimmed || !isValidFirestoreDocId(trimmed) || !isApprovedDemoProblemId(trimmed)) {
+    if (!trimmed || !isValidFirestoreDocId(trimmed)) {
       return null;
     }
 
     if (options.forceRefresh) {
       this.singleCache.delete(trimmed);
       this.bundleCache = null;
+      this.publishedCache = null;
     }
 
     if (this.singleCache.has(trimmed)) {
       return this.singleCache.get(trimmed) ?? null;
     }
 
-    if (this.bundleInFlight) {
+    if (this.bundleInFlight && isApprovedDemoProblemId(trimmed)) {
       const bundle = await this.bundleInFlight;
       const found = bundle.problems.find((p) => p.id === trimmed);
       const foundOpp = bundle.opportunities.find((o) => o.id === trimmed);
@@ -311,7 +535,9 @@ export class FirestoreProblemRepository implements ProblemRepository {
     }
 
     const singlePromise = (async (): Promise<SingleDemoProblemResult | null> => {
-      const fetched = await this.fetchSingleValidatedDoc(trimmed);
+      const fetched = isApprovedDemoProblemId(trimmed)
+        ? await this.fetchSingleValidatedDoc(trimmed)
+        : await this.fetchSinglePublishedDoc(trimmed);
       this.singleCache.set(trimmed, fetched);
       return fetched;
     })();

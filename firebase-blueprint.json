@@ -116,11 +116,16 @@
       "properties": {
         "uid": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
           "description": "Firebase Auth UID matching the document ID."
         },
         "displayName": {
           "type": "string",
-          "description": "Optional sanitized display name (bounded <= 120 chars; may be null)."
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Optional sanitized display name (trimmed non-empty <= 120 chars; may be null)."
         },
         "eligibility": {
           "type": "object",
@@ -161,6 +166,9 @@
       "properties": {
         "problemId": {
           "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
           "description": "Approved problem identifier matching the document ID."
         },
         "savedAt": {
@@ -183,6 +191,142 @@
         "sourceScreen",
         "schemaVersion"
       ]
+    },
+    "PublishedProblem": {
+      "title": "PublishedProblem",
+      "description": "Public, read-only sanitized research problem record approved via founder editorial review and published to /publishedProblems.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Published problem identifier matching the document ID."
+        },
+        "slug": {
+          "type": "string",
+          "description": "URL-safe slug matching the document ID."
+        },
+        "title": {
+          "type": "string",
+          "description": "Published problem headline."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Evidence-grounded problem summary."
+        },
+        "categories": {
+          "type": "array",
+          "description": "Structured category tags.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "affectedAudience": {
+          "type": "array",
+          "description": "Audience segments supported by research observations.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recurrenceNote": {
+          "type": "string",
+          "description": "Honest statement describing observed recurrence and limitations."
+        },
+        "isIllustrativeDemo": {
+          "type": "boolean",
+          "description": "Must be false for published research problems."
+        },
+        "publishedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp when founder approved publication."
+        },
+        "publicationStatus": {
+          "type": "string",
+          "description": "'published' when publicly readable or 'archived' when withdrawn from public feed."
+        },
+        "verifiedEvidenceCount": {
+          "type": "number",
+          "description": "Count of verified supporting observations."
+        },
+        "independentEvidenceCount": {
+          "type": "number",
+          "description": "Deduplicated count of independent evidence records."
+        },
+        "sourceDiversityCount": {
+          "type": "number",
+          "description": "Count of distinct approved sources cited."
+        },
+        "coverageNote": {
+          "type": "string",
+          "description": "Honest summary of evidence coverage."
+        },
+        "evidence": {
+          "type": "array",
+          "description": "Sanitized public evidence references (excludes reviewer notes and PII).",
+          "items": {
+            "type": "object"
+          }
+        },
+        "researchLimitations": {
+          "type": "array",
+          "description": "Explicit sampling and evidence limitations.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unknownsAndRisks": {
+          "type": "array",
+          "description": "Unresolved questions and risks.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "insights": {
+          "type": "array",
+          "description": "Categorized insights distinguishing verified_observation from ai_generated/hypothesis.",
+          "items": {
+            "type": "object"
+          }
+        },
+        "existingAlternatives": {
+          "type": "array",
+          "description": "Existing workarounds or alternatives documented in observations.",
+          "items": {
+            "type": "object"
+          }
+        },
+        "commercialRelevance": {
+          "type": "object",
+          "description": "7-dimension qualitative commercial relevance assessment without invented numeric scores."
+        },
+        "schemaVersion": {
+          "type": "number",
+          "description": "Positive integer schema version."
+        }
+      },
+      "required": [
+        "id",
+        "slug",
+        "title",
+        "summary",
+        "categories",
+        "affectedAudience",
+        "recurrenceNote",
+        "isIllustrativeDemo",
+        "publishedAt",
+        "publicationStatus",
+        "verifiedEvidenceCount",
+        "coverageNote",
+        "evidence",
+        "researchLimitations",
+        "unknownsAndRisks",
+        "insights",
+        "existingAlternatives",
+        "schemaVersion"
+      ]
     }
   },
   "firestore": {
@@ -190,13 +334,17 @@
       "schema": "DemoProblem",
       "description": "Public read-only single-document demonstration records for the 3 approved demo IDs. Collection listing and all client writes are denied."
     },
+    "/publishedProblems/{problemId}": {
+      "schema": "PublishedProblem",
+      "description": "Public read-only sanitized research records (get and limit<=50 list where publicationStatus == 'published' and isIllustrativeDemo == false; all client writes denied)."
+    },
     "/users/{userId}": {
       "schema": "UserProfile",
       "description": "Owner-only user profile document storing self-declared 18+ eligibility and legal consent timestamps without unnecessary PII."
     },
     "/users/{userId}/savedOpportunities/{problemId}": {
       "schema": "SavedOpportunity",
-      "description": "Owner-only subcollection storing bookmarks keyed by approved problemId to prevent duplicates."
+      "description": "Owner-only subcollection storing bookmarks keyed by approved demo or published problemId to prevent duplicates."
     }
   }
 }
