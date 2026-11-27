@@ -41,10 +41,15 @@ import {
   rejectClusterEditorial,
   transitionClusterToUnderReview,
 } from './publicationWorkflow';
+import {
+  formatPublishedInventoryReport,
+  runPublishedProblemsInventoryCheck,
+} from './publishedInventory';
 import { planResearchImport } from './researchImport';
 
 export type CliCommand =
   | 'verify-connection'
+  | 'inventory-published'
   | 'seed-demo'
   | 'ingest'
   | 'research-import'
@@ -72,6 +77,7 @@ export interface ParsedCliArgs {
   readonly reason?: string;
   readonly projectId?: string;
   readonly databaseId?: string;
+  readonly pageSize?: number;
   readonly apply: boolean;
   readonly approve: boolean;
   readonly conflictPolicy: ConflictPolicy;
@@ -99,6 +105,7 @@ export interface CliDependencies {
 
 const VALID_COMMANDS = new Set<CliCommand>([
   'verify-connection',
+  'inventory-published',
   'seed-demo',
   'ingest',
   'research-import',
@@ -162,6 +169,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let reason: string | undefined;
   let projectId: string | undefined;
   let databaseId: string | undefined;
+  let pageSize: number | undefined;
   let apply = false;
   let approve = false;
   let conflictPolicy: ConflictPolicy = 'abort';
@@ -225,6 +233,14 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       const res = readFlagValue(args, i, '--database-id');
       databaseId = res.value;
       i = res.nextIndex;
+    } else if (token === '--page-size' || token.startsWith('--page-size=')) {
+      const res = readFlagValue(args, i, '--page-size');
+      const parsedSize = Number(res.value);
+      if (!Number.isInteger(parsedSize) || parsedSize < 1 || parsedSize > 500) {
+        throw new Error('Flag "--page-size" must be an integer between 1 and 500.');
+      }
+      pageSize = parsedSize;
+      i = res.nextIndex;
     } else if (token === '--on-conflict' || token.startsWith('--on-conflict=')) {
       const res = readFlagValue(args, i, '--on-conflict');
       if (res.value !== 'abort' && res.value !== 'skip' && res.value !== 'overwrite') {
@@ -279,6 +295,7 @@ export function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
     reason,
     projectId,
     databaseId,
+    pageSize,
     apply,
     approve,
     conflictPolicy,
@@ -436,6 +453,7 @@ export async function runAdminCli(
         '',
         'Usage:',
         '  tsx server/admin/cli.ts verify-connection [--json]',
+        '  tsx server/admin/cli.ts inventory-published [--page-size <n>] [--project-id <id>] [--database-id <id>] [--json]',
         '  tsx server/admin/cli.ts seed-demo [--dry-run] [--apply --approve] [--on-conflict=abort|skip|overwrite] [--confirm-overwrite=id1,id2] [--json]',
         '  tsx server/admin/cli.ts ingest --file <records.json> [--dry-run] [--apply --approve] [--on-conflict=abort|skip|overwrite] [--confirm-overwrite=path1,path2] [--json]',
         '  tsx server/admin/cli.ts research-import --file <package.json> [--dry-run] [--apply --approve] [--json]',
@@ -486,6 +504,21 @@ export async function runAdminCli(
         }
       }
       return report.allValidAndMatching ? 0 : 1;
+    }
+
+    if (parsed.command === 'inventory-published') {
+      const report = await runPublishedProblemsInventoryCheck(store, {
+        pageSize: parsed.pageSize,
+      });
+      if (parsed.jsonOutput) {
+        out(JSON.stringify({ identity, report }, null, 2));
+      } else {
+        out(
+          `Identity: ADC=${identity.adcKind}${identity.impersonatedServiceAccount ? ` -> ${identity.impersonatedServiceAccount}` : ''}`
+        );
+        out(formatPublishedInventoryReport(report));
+      }
+      return 0;
     }
 
     if (parsed.command === 'seed-demo' || parsed.command === 'ingest') {

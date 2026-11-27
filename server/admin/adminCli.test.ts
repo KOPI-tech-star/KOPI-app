@@ -104,6 +104,35 @@ function createInMemoryAdminStore(options: {
       }));
     },
 
+    async listDocumentsPage(collection, pageOpts = {}) {
+      const pageSize =
+        typeof pageOpts.pageSize === 'number' &&
+        Number.isInteger(pageOpts.pageSize) &&
+        pageOpts.pageSize > 0
+          ? pageOpts.pageSize
+          : 50;
+      const sorted = Array.from(getCollMap(collection).entries()).sort(([a], [b]) =>
+        a.localeCompare(b)
+      );
+      const startIndex = pageOpts.startAfterId
+        ? sorted.findIndex(([id]) => id > pageOpts.startAfterId!)
+        : 0;
+      const slice = startIndex === -1 ? [] : sorted.slice(startIndex, startIndex + pageSize + 1);
+      const hasMore = slice.length > pageSize;
+      const pageEntries = hasMore ? slice.slice(0, pageSize) : slice;
+      const docs = pageEntries.map(([id, entry]) => ({
+        exists: true,
+        id,
+        updateTimeMs: entry.updateTimeMs,
+        data: JSON.parse(JSON.stringify(entry.data)) as Record<string, unknown>,
+      }));
+      return {
+        docs,
+        hasMore,
+        nextCursor: hasMore && docs.length > 0 ? docs[docs.length - 1]!.id : null,
+      };
+    },
+
     async createDocument(collection, documentId, data) {
       const coll = getCollMap(collection);
       if (coll.has(documentId)) {

@@ -76,13 +76,15 @@ export function EvaluationReadinessPanel({
             {statusExplanation}
           </p>
 
-          {problem?.founderExceptionNote && (
+          {problem?.publishedUnderFounderException && (
             <p
-              data-testid="evaluation-founder-exception-note"
+              data-testid="evaluation-founder-exception-notice"
               className="font-dm-sans mt-2.5 rounded-lg border border-[#C65A1B]/25 bg-[#FAE8D7]/70 px-3 py-2 text-[0.8125rem] text-[#7B2D0C]"
             >
-              <strong>Founder publication exception:</strong>{' '}
-              {problem.founderExceptionNote}
+              <strong>Single-source exception disclosure:</strong> This problem
+              was published under a documented founder exception with fewer than
+              two independent sources. Treat early findings cautiously until
+              independent corroboration is added.
             </p>
           )}
 

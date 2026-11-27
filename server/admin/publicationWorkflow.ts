@@ -8,6 +8,7 @@ import {
   type DataSourceDocument,
   type EvidenceLinkDocument,
   type ProblemClusterDocument,
+  type PublicCommercialRelevanceAssessment,
   type PublishedProblemDocument,
   type ResearchInsightDocument,
   type SourceObservationDocument,
@@ -78,6 +79,15 @@ export function checkClusterPublicationReadiness(params: {
     errors.push(...dedup.invalidReferenceErrors);
   }
 
+  if (
+    cluster.isSyntheticTestFixture === true ||
+    cluster.researchOrigin === 'synthetic_test_fixture'
+  ) {
+    errors.push(
+      `Cluster "${cluster.problemId}" is marked as a synthetic test fixture and cannot be published as genuine research.`
+    );
+  }
+
   let verifiedSupportingCount = 0;
   for (const link of dedup.uniqueLinks) {
     const obs = obsById.get(link.observationId);
@@ -93,7 +103,27 @@ export function checkClusterPublicationReadiness(params: {
       );
       continue;
     }
+    if (
+      obs.isSyntheticTestFixture === true ||
+      obs.researchOrigin === 'synthetic_test_fixture' ||
+      source.isSyntheticTestFixture === true ||
+      source.researchOrigin === 'synthetic_test_fixture'
+    ) {
+      errors.push(
+        `Observation "${obs.observationId}" (source "${source.sourceId}") carries synthetic test fixture provenance and cannot be published as genuine research.`
+      );
+      continue;
+    }
     if (obs.verificationStatus === 'verified' && link.evidenceRole !== 'contradictory') {
+      if (
+        source.researchOrigin !== 'genuine_research' ||
+        obs.researchOrigin !== 'genuine_research'
+      ) {
+        errors.push(
+          `Observation "${obs.observationId}" and source "${source.sourceId}" require explicit genuine_research provenance before publication.`
+        );
+        continue;
+      }
       verifiedSupportingCount += 1;
     }
   }
@@ -298,6 +328,15 @@ export function buildPublishedProblemProjection(params: {
     )
   );
 
+  if (
+    cluster.isSyntheticTestFixture === true ||
+    cluster.researchOrigin === 'synthetic_test_fixture'
+  ) {
+    throw new Error(
+      `Cannot publish "${cluster.problemId}": synthetic test fixtures cannot be published as genuine research.`
+    );
+  }
+
   // Build sanitized verified EvidenceRecord[]
   const evidence: EvidenceRecord[] = [];
   for (const link of deduped.uniqueLinks) {
@@ -308,6 +347,24 @@ export function buildPublishedProblemProjection(params: {
     const source = sourcesById.get(obs.sourceId);
     if (!source || source.activationStatus !== 'active' || source.permissionReviewStatus !== 'approved') {
       continue;
+    }
+    if (
+      obs.isSyntheticTestFixture === true ||
+      obs.researchOrigin === 'synthetic_test_fixture' ||
+      source.isSyntheticTestFixture === true ||
+      source.researchOrigin === 'synthetic_test_fixture'
+    ) {
+      throw new Error(
+        `Cannot publish "${cluster.problemId}": observation "${obs.observationId}" carries synthetic test fixture provenance.`
+      );
+    }
+    if (
+      source.researchOrigin !== 'genuine_research' ||
+      obs.researchOrigin !== 'genuine_research'
+    ) {
+      throw new Error(
+        `Cannot publish "${cluster.problemId}": observation "${obs.observationId}" lacks explicit genuine_research provenance.`
+      );
     }
 
     evidence.push({
@@ -384,11 +441,13 @@ export function buildPublishedProblemProjection(params: {
     ])
   ).slice(0, 15);
 
-  const coverageNote = cluster.founderExceptionReason?.trim()
-    ? `Published under documented founder exception with ${evidence.length} verified observation(s) across ${summaryStats.sourceDiversityCount} distinct source(s).`
+  const publishedUnderFounderException = Boolean(cluster.founderExceptionReason?.trim());
+
+  const coverageNote = publishedUnderFounderException
+    ? `Published under a documented founder exception with ${evidence.length} verified observation(s) across ${summaryStats.sourceDiversityCount} distinct source(s).`
     : `Based on ${evidence.length} verified observation(s) across ${summaryStats.independentRecordCount} independent record(s) and ${summaryStats.sourceDiversityCount} distinct source(s).`;
 
-  const commercialRelevance =
+  const sourceRelevance =
     cluster.commercialRelevance ??
     buildQualitativeCommercialRelevance({
       cluster,
@@ -398,6 +457,21 @@ export function buildPublishedProblemProjection(params: {
       assessedAt: publishedAt,
       founderDecisionNote: cluster.founderExceptionReason ?? null,
     });
+
+  // Construct public commercialRelevance from explicitly selected public fields only,
+  // excluding operator identifiers (assessedBy) and raw internal notes (founderDecisionNote).
+  const publicCommercialRelevance: PublicCommercialRelevanceAssessment = {
+    assessedAt: sourceRelevance.assessedAt,
+    overallSummary: sourceRelevance.overallSummary,
+    dimensions: sourceRelevance.dimensions.map((dimension) => ({
+      key: dimension.key,
+      label: dimension.label,
+      status: dimension.status,
+      summary: dimension.summary,
+      supportingObservationIds: [...dimension.supportingObservationIds],
+      unresolvedQuestion: dimension.unresolvedQuestion,
+    })),
+  };
 
   const candidateProjection: PublishedProblemDocument = {
     id: cluster.problemId,
@@ -426,8 +500,9 @@ export function buildPublishedProblemProjection(params: {
         : ['Additional market validation still required before building solutions.'],
     insights: publicInsights,
     existingAlternatives: sanitizedAlternatives,
-    commercialRelevance,
-    founderExceptionNote: cluster.founderExceptionReason ?? null,
+    commercialRelevance: publicCommercialRelevance,
+    publishedUnderFounderException,
+    researchOrigin: 'genuine_research',
     schemaVersion: 1,
   };
 

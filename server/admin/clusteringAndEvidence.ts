@@ -7,6 +7,7 @@ import {
   type CommercialRelevanceStatus,
   type EvidenceLinkDocument,
   type ProblemClusterDocument,
+  type ResearchOriginKind,
   type SourceObservationDocument,
 } from '../../src/data/firestoreContracts';
 import {
@@ -498,6 +499,27 @@ export function proposeClustersFromObservations(
       limitations.push('Geographical coverage has not yet been established across sources.');
     }
 
+    const hasSyntheticMember = bucket.members.some(
+      (m) =>
+        m.isSyntheticTestFixture === true ||
+        m.researchOrigin === 'synthetic_test_fixture'
+    );
+    const allGenuineMembers =
+      bucket.members.length > 0 &&
+      bucket.members.every(
+        (m) =>
+          m.researchOrigin === 'genuine_research' &&
+          m.isSyntheticTestFixture !== true
+      );
+    const clusterOriginMeta: {
+      isSyntheticTestFixture?: boolean;
+      researchOrigin?: ResearchOriginKind;
+    } = hasSyntheticMember
+      ? { isSyntheticTestFixture: true, researchOrigin: 'synthetic_test_fixture' }
+      : allGenuineMembers
+        ? { isSyntheticTestFixture: false, researchOrigin: 'genuine_research' }
+        : {};
+
     const baseCluster: ProblemClusterDocument = {
       problemId,
       slug: problemId,
@@ -521,6 +543,7 @@ export function proposeClustersFromObservations(
         'Verify buyer budget ownership and willingness to pay across affected cohorts.',
       ],
       evidenceSummary: summaryStats,
+      ...clusterOriginMeta,
       publicationStatus: 'draft',
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -633,6 +656,21 @@ export function mergeClusters(params: {
     ])
   );
 
+  const mergedSynthetic =
+    params.targetCluster.isSyntheticTestFixture === true ||
+    params.targetCluster.researchOrigin === 'synthetic_test_fixture' ||
+    params.sourceCluster.isSyntheticTestFixture === true ||
+    params.sourceCluster.researchOrigin === 'synthetic_test_fixture';
+  const mergedOriginMeta: {
+    isSyntheticTestFixture?: boolean;
+    researchOrigin?: ResearchOriginKind;
+  } = mergedSynthetic
+    ? { isSyntheticTestFixture: true, researchOrigin: 'synthetic_test_fixture' }
+    : params.targetCluster.researchOrigin === 'genuine_research' &&
+        params.sourceCluster.researchOrigin === 'genuine_research'
+      ? { isSyntheticTestFixture: false, researchOrigin: 'genuine_research' }
+      : {};
+
   const updatedBase: ProblemClusterDocument = {
     ...invalidatedTarget,
     categories,
@@ -640,6 +678,7 @@ export function mergeClusters(params: {
     researchLimitations,
     evidenceSummary: summary,
     evidenceAvailability: summary.verifiedCount > 0 ? 'verified' : 'unverified_only',
+    ...mergedOriginMeta,
     updatedAt: nowIso,
   };
 
@@ -718,6 +757,20 @@ export function splitObservationFromCluster(params: {
     newLinks
   );
 
+  const splitSynthetic =
+    params.observationToSplit.isSyntheticTestFixture === true ||
+    params.observationToSplit.researchOrigin === 'synthetic_test_fixture' ||
+    params.cluster.isSyntheticTestFixture === true ||
+    params.cluster.researchOrigin === 'synthetic_test_fixture';
+  const splitOriginMeta: {
+    isSyntheticTestFixture?: boolean;
+    researchOrigin?: ResearchOriginKind;
+  } = splitSynthetic
+    ? { isSyntheticTestFixture: true, researchOrigin: 'synthetic_test_fixture' }
+    : params.observationToSplit.researchOrigin === 'genuine_research'
+      ? { isSyntheticTestFixture: false, researchOrigin: 'genuine_research' }
+      : {};
+
   const newClusterBase: ProblemClusterDocument = {
     problemId: params.newProblemId,
     slug: params.newProblemId,
@@ -738,6 +791,7 @@ export function splitObservationFromCluster(params: {
       'Split from parent cluster; single observation requires independent corroboration before publication.',
     ],
     evidenceSummary: newSummary,
+    ...splitOriginMeta,
     publicationStatus: 'draft',
     createdAt: nowIso,
     updatedAt: nowIso,

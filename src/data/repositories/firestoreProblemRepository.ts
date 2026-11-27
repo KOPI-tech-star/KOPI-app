@@ -462,7 +462,9 @@ export class FirestoreProblemRepository implements ProblemRepository {
         // until CI emulator verification & founder deployment approval.
         publishedStatus = 'rules_pending';
       } else {
-        throw err;
+        // Surface an unavailable state for published research without discarding
+        // successfully loaded illustrative demoProblems.
+        publishedStatus = 'unavailable';
       }
     }
 

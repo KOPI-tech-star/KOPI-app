@@ -269,7 +269,15 @@ export async function planResearchImport(
       'attributionRequirements',
       'retentionRestrictions',
     ]);
-    const validation = validateDataSourceRecord(rawSource);
+    const sourceCandidate: Record<string, unknown> = {
+      ...sourceRecordObj,
+      isSyntheticTestFixture:
+        sourceRecordObj.isSyntheticTestFixture ?? pkg.isSyntheticTestFixture,
+      researchOrigin:
+        sourceRecordObj.researchOrigin ??
+        (pkg.isSyntheticTestFixture ? 'synthetic_test_fixture' : 'genuine_research'),
+    };
+    const validation = validateDataSourceRecord(sourceCandidate);
     const combinedErrors = [...piiOrScrapeErrors, ...validation.errors];
 
     if (validation.ok && validation.value) {
@@ -279,6 +287,18 @@ export async function planResearchImport(
       ) {
         combinedErrors.push(
           `Source "${validation.value.sourceId}" is not approved and active (review=${validation.value.permissionReviewStatus}, activation=${validation.value.activationStatus}).`
+        );
+      }
+      if (
+        (pkg.isSyntheticTestFixture &&
+          (validation.value.isSyntheticTestFixture === false ||
+            validation.value.researchOrigin === 'genuine_research')) ||
+        (!pkg.isSyntheticTestFixture &&
+          (validation.value.isSyntheticTestFixture === true ||
+            validation.value.researchOrigin === 'synthetic_test_fixture'))
+      ) {
+        combinedErrors.push(
+          `Source "${validation.value.sourceId}" origin metadata conflicts with package isSyntheticTestFixture=${pkg.isSyntheticTestFixture}.`
         );
       }
     }
@@ -402,6 +422,10 @@ export async function planResearchImport(
         : deriveObservationId(sourceId || 'src', contentFingerprint);
 
     const matchedSource = activeSourceMap.get(sourceId);
+    const effectiveSynthetic =
+      pkg.isSyntheticTestFixture ||
+      matchedSource?.isSyntheticTestFixture === true ||
+      matchedSource?.researchOrigin === 'synthetic_test_fixture';
     const candidateDoc: Record<string, unknown> = {
       ...rawObs,
       observationId: resolvedObsId,
@@ -414,6 +438,10 @@ export async function planResearchImport(
         rawObs.publicationTimestamp === undefined ? null : rawObs.publicationTimestamp,
       removalOrRestrictionStatus: rawObs.removalOrRestrictionStatus ?? 'active',
       sourceName: rawObs.sourceName ?? matchedSource?.sourceName ?? null,
+      isSyntheticTestFixture: rawObs.isSyntheticTestFixture ?? effectiveSynthetic,
+      researchOrigin:
+        rawObs.researchOrigin ??
+        (effectiveSynthetic ? 'synthetic_test_fixture' : 'genuine_research'),
       schemaVersion: 1,
     };
 
@@ -422,6 +450,21 @@ export async function planResearchImport(
       new Set(activeSourceMap.keys())
     );
     itemErrors.push(...obsValidation.errors);
+
+    if (obsValidation.ok && obsValidation.value) {
+      if (
+        (pkg.isSyntheticTestFixture &&
+          (obsValidation.value.isSyntheticTestFixture === false ||
+            obsValidation.value.researchOrigin === 'genuine_research')) ||
+        (!pkg.isSyntheticTestFixture &&
+          (obsValidation.value.isSyntheticTestFixture === true ||
+            obsValidation.value.researchOrigin === 'synthetic_test_fixture'))
+      ) {
+        itemErrors.push(
+          `Observation "${obsValidation.value.observationId}" origin metadata conflicts with package isSyntheticTestFixture=${pkg.isSyntheticTestFixture}.`
+        );
+      }
+    }
 
     // Explicitly require valid observationTimestamp
     if (!parseValidIsoTimestamp(rawObs.observationTimestamp)) {

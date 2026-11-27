@@ -94,6 +94,7 @@ export function OpportunityRadarScreen({
     missingIds,
     publishedCount,
     demoCount,
+    publishedStatus,
     errorCode,
     errorMessage,
     isDevOfflineFixture,
@@ -476,6 +477,19 @@ export function OpportunityRadarScreen({
                 </button>
               </div>
             )}
+
+            {loadStatus === 'success' &&
+              (publishedStatus === 'rules_pending' ||
+                publishedStatus === 'unavailable') && (
+                <div
+                  role="status"
+                  data-testid="published-research-unavailable-notice"
+                  className="font-dm-sans mt-3 rounded-xl border border-[#C65A1B]/25 bg-[#FFF9F3] px-3.5 py-2.5 text-[0.8125rem] text-[#7B2D0C]"
+                >
+                  Published research is unavailable right now. You can still explore
+                  illustrative examples.
+                </div>
+              )}
 
             {loadStatus === 'success' && missingIds.length > 0 && (
               <p

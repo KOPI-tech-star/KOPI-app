@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type {
   DataSourceDocument,
@@ -40,6 +41,7 @@ import {
   planResearchImport,
 } from './researchImport';
 import { executeIngestionPlan } from './ingestionCore';
+import { runPublishedProblemsInventoryCheck } from './publishedInventory';
 import { runAdminCli } from './cli';
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..');
@@ -49,6 +51,7 @@ function createInMemoryResearchStore(): {
   readonly identity: RuntimeIdentityInspection;
   getDoc(collection: FirestoreCollectionName, id: string): Record<string, unknown> | undefined;
   countCollection(collection: FirestoreCollectionName): number;
+  setRawForTest(collection: FirestoreCollectionName, id: string, data: Record<string, unknown>): void;
 } {
   const db = new Map<string, Map<string, { updateTimeMs: number; data: Record<string, unknown> }>>();
   let clockMs = 1700000000000;
@@ -93,6 +96,35 @@ function createInMemoryResearchStore(): {
           updateTimeMs: entry.updateTimeMs,
           data: clone(entry.data),
         }));
+    },
+
+    async listDocumentsPage(collection, options = {}) {
+      const pageSize =
+        typeof options.pageSize === 'number' &&
+        Number.isInteger(options.pageSize) &&
+        options.pageSize > 0
+          ? options.pageSize
+          : 50;
+      const sorted = Array.from(collMap(collection).entries()).sort(([a], [b]) =>
+        a.localeCompare(b)
+      );
+      const startIdx = options.startAfterId
+        ? sorted.findIndex(([id]) => id > options.startAfterId!)
+        : 0;
+      const slice = startIdx === -1 ? [] : sorted.slice(startIdx, startIdx + pageSize + 1);
+      const hasMore = slice.length > pageSize;
+      const pageEntries = hasMore ? slice.slice(0, pageSize) : slice;
+      const docs = pageEntries.map(([id, entry]) => ({
+        exists: true,
+        id,
+        updateTimeMs: entry.updateTimeMs,
+        data: clone(entry.data),
+      }));
+      return {
+        docs,
+        hasMore,
+        nextCursor: hasMore && docs.length > 0 ? docs[docs.length - 1]!.id : null,
+      };
     },
 
     async createDocument(collection, documentId, data) {
@@ -166,6 +198,10 @@ function createInMemoryResearchStore(): {
     },
     countCollection(collection) {
       return collMap(collection).size;
+    },
+    setRawForTest(collection, id, data) {
+      clockMs += 1;
+      collMap(collection).set(id, { updateTimeMs: clockMs, data: clone(data) });
     },
   };
 }
@@ -490,6 +526,8 @@ test('5. Editorial gate, founder exception rule, sanitized projection, atomic pu
     attributionRequirements: 'Cite Civic Audit One',
     retentionRestrictions: 'Retain summary only',
     activationStatus: 'active',
+    isSyntheticTestFixture: false,
+    researchOrigin: 'genuine_research',
     createdAt: '2026-11-01T00:00:00.000Z',
     updatedAt: '2026-11-01T00:00:00.000Z',
     schemaVersion: 1,
@@ -519,6 +557,8 @@ test('5. Editorial gate, founder exception rule, sanitized projection, atomic pu
     provenance: 'Approved Civic Audit One',
     retentionPolicy: 'retain_summary',
     removalOrRestrictionStatus: 'active',
+    isSyntheticTestFixture: false,
+    researchOrigin: 'genuine_research',
     schemaVersion: 1,
   };
   const obs2: SourceObservationDocument = {
@@ -626,7 +666,7 @@ test('5. Editorial gate, founder exception rule, sanitized projection, atomic pu
   );
 });
 
-test('6. End-to-end CLI pipeline executes import -> AI extract -> cluster -> assess -> review -> preview -> publish -> archive safely', async () => {
+test('6. End-to-end CLI pipeline executes controlled genuine-origin import -> AI extract -> cluster -> assess -> review -> preview -> publish -> archive safely', async () => {
   const mem = createInMemoryResearchStore();
   const stdoutLines: string[] = [];
   const stderrLines: string[] = [];
@@ -657,100 +697,114 @@ test('6. End-to-end CLI pipeline executes import -> AI extract -> cluster -> ass
   assert.equal(stderrLines.length, 1);
   stderrLines.length = 0;
 
-  // 1. research-import (dry-run then apply)
-  assert.equal(
-    await runAdminCli(
-      ['research-import', '--file', 'docs/examples/synthetic-research-import.example.json', '--dry-run'],
-      deps
-    ),
-    0
-  );
-  assert.equal(mem.countCollection('sourceObservations'), 0);
+  const baseFixture = loadSyntheticFixture();
+  const controlledGenuinePkg = {
+    ...baseFixture,
+    packageId: 'pkg_controlled_genuine_test_01',
+    isSyntheticTestFixture: false,
+  };
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kopi-genuine-cli-'));
+  const genuineFixturePath = path.join(tmpDir, 'genuine-import.json');
+  fs.writeFileSync(genuineFixturePath, JSON.stringify(controlledGenuinePkg), 'utf8');
 
-  assert.equal(
-    await runAdminCli(
-      ['research-import', '--file', 'docs/examples/synthetic-research-import.example.json', '--apply', '--approve'],
-      deps
-    ),
-    0
-  );
-  assert.equal(mem.countCollection('sourceObservations'), 2);
+  try {
+    // 1. research-import (dry-run then apply)
+    assert.equal(
+      await runAdminCli(
+        ['research-import', '--file', genuineFixturePath, '--dry-run'],
+        deps
+      ),
+      0
+    );
+    assert.equal(mem.countCollection('sourceObservations'), 0);
 
-  // 2. extract-observations
-  assert.equal(
-    await runAdminCli(['extract-observations', '--apply', '--approve'], deps),
-    0
-  );
-  assert.ok(mem.countCollection('researchInsights') >= 2);
+    assert.equal(
+      await runAdminCli(
+        ['research-import', '--file', genuineFixturePath, '--apply', '--approve'],
+        deps
+      ),
+      0
+    );
+    assert.equal(mem.countCollection('sourceObservations'), 2);
 
-  // 3. propose-clusters
-  assert.equal(
-    await runAdminCli(['propose-clusters', '--apply', '--approve'], deps),
-    0
-  );
-  assert.ok(mem.countCollection('problemClusters') >= 1);
+    // 2. extract-observations
+    assert.equal(
+      await runAdminCli(['extract-observations', '--apply', '--approve'], deps),
+      0
+    );
+    assert.ok(mem.countCollection('researchInsights') >= 2);
 
-  const clusters = await mem.store.listDocuments('problemClusters');
-  const firstProblemId = clusters[0]!.id;
+    // 3. propose-clusters
+    assert.equal(
+      await runAdminCli(['propose-clusters', '--apply', '--approve'], deps),
+      0
+    );
+    assert.ok(mem.countCollection('problemClusters') >= 1);
 
-  // 4. assess-evidence
-  assert.equal(
-    await runAdminCli(
-      ['assess-evidence', '--problem-id', firstProblemId, '--assessed-by', 'founder', '--apply', '--approve'],
-      deps
-    ),
-    0
-  );
+    const clusters = await mem.store.listDocuments('problemClusters');
+    const firstProblemId = clusters[0]!.id;
 
-  // 5. review-cluster submit + approve
-  assert.equal(
-    await runAdminCli(
-      ['review-cluster', '--problem-id', firstProblemId, '--action', 'submit', '--reviewer', 'analyst', '--apply', '--approve'],
-      deps
-    ),
-    0
-  );
-  assert.equal(
-    await runAdminCli(
-      ['review-cluster', '--problem-id', firstProblemId, '--action', 'approve', '--reviewer', 'founder', '--apply', '--approve'],
-      deps
-    ),
-    0
-  );
+    // 4. assess-evidence
+    assert.equal(
+      await runAdminCli(
+        ['assess-evidence', '--problem-id', firstProblemId, '--assessed-by', 'founder', '--apply', '--approve'],
+        deps
+      ),
+      0
+    );
 
-  // 6. preview-publication & publish-problem
-  assert.equal(
-    await runAdminCli(
-      ['preview-publication', '--problem-id', firstProblemId],
-      deps
-    ),
-    0
-  );
-  assert.equal(
-    await runAdminCli(
-      ['publish-problem', '--problem-id', firstProblemId, '--apply', '--approve'],
-      deps
-    ),
-    0
-  );
-  assert.equal(
-    mem.getDoc('publishedProblems', firstProblemId)?.publicationStatus,
-    'published'
-  );
+    // 5. review-cluster submit + approve
+    assert.equal(
+      await runAdminCli(
+        ['review-cluster', '--problem-id', firstProblemId, '--action', 'submit', '--reviewer', 'analyst', '--apply', '--approve'],
+        deps
+      ),
+      0
+    );
+    assert.equal(
+      await runAdminCli(
+        ['review-cluster', '--problem-id', firstProblemId, '--action', 'approve', '--reviewer', 'founder', '--apply', '--approve'],
+        deps
+      ),
+      0
+    );
 
-  // 7. archive-problem
-  assert.equal(
-    await runAdminCli(
-      ['archive-problem', '--problem-id', firstProblemId, '--reason', 'Synthetic fixture test completed', '--apply', '--approve'],
-      deps
-    ),
-    0
-  );
-  assert.equal(
-    mem.getDoc('publishedProblems', firstProblemId)?.publicationStatus,
-    'archived'
-  );
-  assert.equal(stderrLines.length, 0);
+    // 6. preview-publication & publish-problem
+    assert.equal(
+      await runAdminCli(
+        ['preview-publication', '--problem-id', firstProblemId],
+        deps
+      ),
+      0
+    );
+    assert.equal(
+      await runAdminCli(
+        ['publish-problem', '--problem-id', firstProblemId, '--apply', '--approve'],
+        deps
+      ),
+      0
+    );
+    const pubDoc = mem.getDoc('publishedProblems', firstProblemId);
+    assert.equal(pubDoc?.publicationStatus, 'published');
+    assert.equal(pubDoc?.researchOrigin, 'genuine_research');
+    assert.equal('assessedBy' in ((pubDoc?.commercialRelevance as Record<string, unknown>) ?? {}), false);
+
+    // 7. archive-problem
+    assert.equal(
+      await runAdminCli(
+        ['archive-problem', '--problem-id', firstProblemId, '--reason', 'Controlled pipeline test completed', '--apply', '--approve'],
+        deps
+      ),
+      0
+    );
+    assert.equal(
+      mem.getDoc('publishedProblems', firstProblemId)?.publicationStatus,
+      'archived'
+    );
+    assert.equal(stderrLines.length, 0);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test('7. GEMINI_EXTRACTION_MODEL configures extraction model cleanly and rejects invalid model identifiers', async () => {
@@ -1027,6 +1081,8 @@ test('9. Material changes invalidate stale approval across clustering, assess-ev
     attributionRequirements: 'Cite Source A',
     retentionRestrictions: 'Summary only',
     activationStatus: 'active',
+    isSyntheticTestFixture: false,
+    researchOrigin: 'genuine_research',
     createdAt: '2026-11-20T00:00:00.000Z',
     updatedAt: '2026-11-20T00:00:00.000Z',
     schemaVersion: 1,
@@ -1051,6 +1107,8 @@ test('9. Material changes invalidate stale approval across clustering, assess-ev
     provenance: 'Source A',
     retentionPolicy: 'retain',
     removalOrRestrictionStatus: 'active',
+    isSyntheticTestFixture: false,
+    researchOrigin: 'genuine_research',
     schemaVersion: 1,
   };
   const obsB: SourceObservationDocument = {
@@ -1253,6 +1311,8 @@ test('10. Founder exception cannot bypass source permissions, unverified evidenc
     attributionRequirements: 'Pending',
     retentionRestrictions: 'Pending',
     activationStatus: 'disabled',
+    isSyntheticTestFixture: false,
+    researchOrigin: 'genuine_research',
     createdAt: '2026-11-20T00:00:00.000Z',
     updatedAt: '2026-11-20T00:00:00.000Z',
     schemaVersion: 1,
@@ -1273,6 +1333,8 @@ test('10. Founder exception cannot bypass source permissions, unverified evidenc
     provenance: 'Pending source',
     retentionPolicy: 'retain',
     removalOrRestrictionStatus: 'active',
+    isSyntheticTestFixture: false,
+    researchOrigin: 'genuine_research',
     schemaVersion: 1,
   };
 
@@ -1325,29 +1387,376 @@ test('10. Founder exception cannot bypass source permissions, unverified evidenc
     /must be in "under_review"/i
   );
 
-  // Even when approved under valid founder exception, sanitization preserves verified evidence only and strips reviewer notes
+  // Distinctive sentinels across all internal assessor and editorial note fields
+  const sentinels = [
+    'SENTINEL_REVIEWER_OP_911',
+    'SENTINEL_REVIEW_NOTE_772',
+    'SENTINEL_APPROVER_OP_883',
+    'SENTINEL_ASSESSOR_OP_441',
+    'SENTINEL_DECISION_NOTE_559',
+    'SENTINEL_EXCEPTION_REASON_664',
+  ];
+
   const underReview = transitionClusterToUnderReview(cluster, {
-    reviewerId: 'analyst-ex',
-    reviewNotes: 'SECRET INTERNAL REVIEW NOTE',
+    reviewerId: 'SENTINEL_REVIEWER_OP_911',
+    reviewNotes: 'SENTINEL_REVIEW_NOTE_772: check internal calibration',
   });
   const approvedWithException = approveClusterForPublication(underReview, {
-    approverId: 'founder-ex',
+    approverId: 'SENTINEL_APPROVER_OP_883',
     observations: [verifiedObs],
     links,
     sourcesById: new Map([[approvedSource.sourceId, approvedSource]]),
-    founderExceptionReason: 'Single verified municipal pharmacy inspection dataset covers 35 stores.',
-    reviewNotes: 'SECRET FOUNDER NOTE',
+    founderExceptionReason: 'SENTINEL_EXCEPTION_REASON_664: single verified municipal inspection covers 35 pharmacies.',
+    reviewNotes: 'SENTINEL_DECISION_NOTE_559: internal editorial approval note',
   });
+
+  const approvedWithCustomAssessor: ProblemClusterDocument = {
+    ...approvedWithException,
+    commercialRelevance: {
+      ...approvedWithException.commercialRelevance!,
+      assessedBy: 'SENTINEL_ASSESSOR_OP_441',
+      founderDecisionNote: 'SENTINEL_DECISION_NOTE_559',
+    },
+  };
+
   const projection = buildPublishedProblemProjection({
-    cluster: approvedWithException,
+    cluster: approvedWithCustomAssessor,
     observations: [verifiedObs],
     links,
     insights: [],
     sourcesById: new Map([[approvedSource.sourceId, approvedSource]]),
   });
   const serialized = JSON.stringify(projection);
-  assert.doesNotMatch(serialized, /SECRET INTERNAL REVIEW NOTE/);
-  assert.doesNotMatch(serialized, /SECRET FOUNDER NOTE/);
+  for (const sentinel of sentinels) {
+    assert.equal(
+      serialized.includes(sentinel),
+      false,
+      `Serialized public projection leaked sentinel "${sentinel}"`
+    );
+  }
+  assert.equal('assessedBy' in (projection.commercialRelevance ?? {}), false);
+  assert.equal('founderDecisionNote' in (projection.commercialRelevance ?? {}), false);
+  assert.equal('founderExceptionReason' in (projection as unknown as Record<string, unknown>), false);
+  assert.equal(projection.publishedUnderFounderException, true);
+  assert.match(projection.coverageNote, /Published under a documented founder exception/i);
   assert.equal(projection.verifiedEvidenceCount, 1);
   assert.equal(projection.isIllustrativeDemo, false);
+});
+
+test('11. Synthetic fixture import passes internal provenance tagging but is strictly blocked from approval and publication while genuine titles mentioning "synthetic" still publish', async () => {
+  const mem = createInMemoryResearchStore();
+  const stdoutLines: string[] = [];
+  const stderrLines: string[] = [];
+  const deps = {
+    initStore: () => ({ store: mem.store, identity: mem.identity }),
+    stdout: (line: string) => stdoutLines.push(line),
+    stderr: (line: string) => stderrLines.push(line),
+  };
+
+  // Import docs/examples/synthetic-research-import.example.json through real CLI
+  assert.equal(
+    await runAdminCli(
+      ['research-import', '--file', 'docs/examples/synthetic-research-import.example.json', '--apply', '--approve'],
+      deps
+    ),
+    0
+  );
+  assert.equal(mem.countCollection('sourceObservations'), 2);
+  const importedObs = await mem.store.listDocuments('sourceObservations');
+  for (const obsSnap of importedObs) {
+    assert.equal(obsSnap.data?.isSyntheticTestFixture, true);
+    assert.equal(obsSnap.data?.researchOrigin, 'synthetic_test_fixture');
+  }
+
+  assert.equal(
+    await runAdminCli(['propose-clusters', '--apply', '--approve'], deps),
+    0
+  );
+  const clusters = await mem.store.listDocuments('problemClusters');
+  const syntheticClusterId = clusters[0]!.id;
+  assert.equal(clusters[0]!.data?.isSyntheticTestFixture, true);
+  assert.equal(clusters[0]!.data?.researchOrigin, 'synthetic_test_fixture');
+
+  assert.equal(
+    await runAdminCli(
+      ['review-cluster', '--problem-id', syntheticClusterId, '--action', 'submit', '--reviewer', 'analyst', '--apply', '--approve'],
+      deps
+    ),
+    0
+  );
+
+  // Approval MUST fail due to explicit synthetic test fixture provenance
+  assert.equal(
+    await runAdminCli(
+      ['review-cluster', '--problem-id', syntheticClusterId, '--action', 'approve', '--reviewer', 'founder', '--apply', '--approve'],
+      deps
+    ),
+    1
+  );
+  assert.equal(mem.getDoc('problemClusters', syntheticClusterId)?.publicationStatus, 'under_review');
+
+  // Direct publish attempt MUST also fail and write 0 docs into publishedProblems
+  assert.equal(
+    await runAdminCli(
+      ['publish-problem', '--problem-id', syntheticClusterId, '--apply', '--approve'],
+      deps
+    ),
+    1
+  );
+  assert.equal(mem.countCollection('publishedProblems'), 0);
+
+  // Genuine-origin research whose subject contains the word "synthetic" MUST NOT be blocked by string matching
+  const genuineSrcA: DataSourceDocument = {
+    sourceId: 'src_textile_a',
+    sourceName: 'Textile Effluent Survey A',
+    sourceCategory: 'research_publication',
+    permittedAccessMechanism: 'official_api',
+    termsOrLicenceReference: 'CC-BY-4.0',
+    permissionReviewStatus: 'approved',
+    reviewDate: '2026-11-20T00:00:00.000Z',
+    attributionRequirements: 'Cite Survey A',
+    retentionRestrictions: 'Summary only',
+    activationStatus: 'active',
+    isSyntheticTestFixture: false,
+    researchOrigin: 'genuine_research',
+    createdAt: '2026-11-20T00:00:00.000Z',
+    updatedAt: '2026-11-20T00:00:00.000Z',
+    schemaVersion: 1,
+  };
+  const genuineSrcB: DataSourceDocument = { ...genuineSrcA, sourceId: 'src_textile_b', sourceName: 'Textile Effluent Survey B' };
+  const genuineObsA: SourceObservationDocument = {
+    observationId: 'obs_textile_1',
+    sourceId: 'src_textile_a',
+    externalReference: 'TX-1',
+    permittedSourceUrl: 'https://example.org/textile-1',
+    canonicalUrl: 'https://example.org/textile-1',
+    permittedExcerptOrSummary: 'Small dyeing units struggle to filter synthetic dye wastewater before municipal discharge.',
+    problemStatement: 'Synthetic dye wastewater filtration bottlenecks in small textile workshops',
+    affectedCustomerSegment: 'Small textile dyeing workshops',
+    observationTimestamp: '2026-11-21T08:00:00.000Z',
+    publicationTimestamp: '2026-11-21T08:00:00.000Z',
+    contentFingerprint: `sha256-${'9'.repeat(64)}`,
+    verificationStatus: 'verified',
+    provenance: 'Approved Textile Survey A',
+    retentionPolicy: 'retain_summary',
+    removalOrRestrictionStatus: 'active',
+    isSyntheticTestFixture: false,
+    researchOrigin: 'genuine_research',
+    schemaVersion: 1,
+  };
+  const genuineObsB: SourceObservationDocument = {
+    ...genuineObsA,
+    observationId: 'obs_textile_2',
+    sourceId: 'src_textile_b',
+    externalReference: 'TX-2',
+    permittedSourceUrl: 'https://example.com/textile-2',
+    canonicalUrl: 'https://example.com/textile-2',
+    contentFingerprint: `sha256-${'8'.repeat(64)}`,
+  };
+  const genuineProposed = proposeClustersFromObservations([genuineObsA, genuineObsB]);
+  const genuineCluster = transitionClusterToUnderReview(genuineProposed.clusters[0]!, {
+    reviewerId: 'lead-textile',
+  });
+  const approvedGenuine = approveClusterForPublication(genuineCluster, {
+    approverId: 'founder-textile',
+    observations: [genuineObsA, genuineObsB],
+    links: genuineProposed.evidenceLinks,
+    sourcesById: new Map([
+      [genuineSrcA.sourceId, genuineSrcA],
+      [genuineSrcB.sourceId, genuineSrcB],
+    ]),
+  });
+  const genuineProjection = buildPublishedProblemProjection({
+    cluster: approvedGenuine,
+    observations: [genuineObsA, genuineObsB],
+    links: genuineProposed.evidenceLinks,
+    insights: [],
+    sourcesById: new Map([
+      [genuineSrcA.sourceId, genuineSrcA],
+      [genuineSrcB.sourceId, genuineSrcB],
+    ]),
+  });
+  assert.match(genuineProjection.title, /Synthetic dye wastewater/i);
+  assert.equal(genuineProjection.researchOrigin, 'genuine_research');
+});
+
+test('12. Read-only inventory check paginates exhaustively, classifies unknown provenance, flags nested private leaks without printing private values, and confirms target DB', async () => {
+  const mem = createInMemoryResearchStore();
+
+  const validBase = {
+    slug: 'doc',
+    title: 'Clinic power outage vaccine spoilage risk',
+    summary: 'Verified field audits show rural primary clinics lose vaccines during overnight outages.',
+    categoryLabel: 'Daily Life',
+    categories: ['Daily Life'],
+    affectedAudience: ['Rural clinic pharmacists'],
+    recurrenceNote: 'Documented across verified field inspection logs.',
+    isIllustrativeDemo: false,
+    publishedAt: '2026-11-26T08:00:00.000Z',
+    publicationStatus: 'published',
+    verifiedEvidenceCount: 1,
+    independentEvidenceCount: 2,
+    sourceDiversityCount: 2,
+    sourceCoverage: 2,
+    geographicalCoverage: ['Assam'],
+    lastUpdated: '2026-11-26T08:00:00.000Z',
+    coverageNote: 'Based on 1 verified observation(s) across 2 independent record(s) and 2 distinct source(s).',
+    evidence: [
+      {
+        id: 'obs-1',
+        problemId: 'doc-a-valid',
+        sourceName: 'Public Health Audit',
+        sourceType: 'research_publication',
+        excerpt: 'Clinics recorded overnight temperature excursions.',
+        externalUrl: 'https://example.org/clinic-1',
+        observedDate: '2026-11-20T09:00:00.000Z',
+        verificationStatus: 'verified',
+      },
+    ],
+    researchLimitations: ['Covers a single district inspection window.'],
+    unknownsAndRisks: ['Maintenance contractor SLAs remain unverified.'],
+    insights: [],
+    existingAlternatives: [],
+    commercialRelevance: {
+      assessedAt: '2026-11-26T07:30:00.000Z',
+      overallSummary: 'Qualitative evidence indicates recurring operational disruption.',
+      dimensions: [
+        {
+          key: 'severity',
+          label: 'Problem Severity',
+          status: 'supported',
+          summary: 'Verified spoilage risk.',
+          supportingObservationIds: ['obs-1'],
+          unresolvedQuestion: null,
+        },
+      ],
+    },
+    publishedUnderFounderException: false,
+    researchOrigin: 'genuine_research',
+    schemaVersion: 1,
+  };
+
+  // 1) Eligible public record
+  mem.setRawForTest('publishedProblems', 'doc-a-valid', {
+    ...validBase,
+    id: 'doc-a-valid',
+    slug: 'doc-a-valid',
+  });
+
+  // 2) Legacy record missing provenance -> provenance must be 'unknown'
+  const { researchOrigin: _omittedOrigin, ...legacyBase } = validBase;
+  mem.setRawForTest('publishedProblems', 'doc-b-legacy', {
+    ...legacyBase,
+    id: 'doc-b-legacy',
+    slug: 'doc-b-legacy',
+    evidence: [
+      {
+        ...validBase.evidence[0],
+        problemId: 'doc-b-legacy',
+      },
+    ],
+  });
+
+  // 3) Synthetic fixture erroneously present in publishedProblems
+  mem.setRawForTest('publishedProblems', 'doc-c-synthetic', {
+    ...validBase,
+    id: 'doc-c-synthetic',
+    slug: 'doc-c-synthetic',
+    isSyntheticTestFixture: true,
+    researchOrigin: 'synthetic_test_fixture',
+    evidence: [
+      {
+        ...validBase.evidence[0],
+        problemId: 'doc-c-synthetic',
+      },
+    ],
+  });
+
+  // 4) Archived record
+  mem.setRawForTest('publishedProblems', 'doc-d-archived', {
+    ...validBase,
+    id: 'doc-d-archived',
+    slug: 'doc-d-archived',
+    publicationStatus: 'archived',
+    evidence: [
+      {
+        ...validBase.evidence[0],
+        problemId: 'doc-d-archived',
+      },
+    ],
+  });
+
+  // 5) Nested private field leak with sensitive sentinel values that must NEVER appear in output
+  const privateSentinel = 'SECRET_OPERATOR_EMAIL_DO_NOT_PRINT_9912';
+  const privateNoteSentinel = 'SECRET_FOUNDER_NOTE_DO_NOT_PRINT_8823';
+  mem.setRawForTest('publishedProblems', 'doc-e-nested-leak', {
+    ...validBase,
+    id: 'doc-e-nested-leak',
+    slug: 'doc-e-nested-leak',
+    evidence: [
+      {
+        ...validBase.evidence[0],
+        problemId: 'doc-e-nested-leak',
+      },
+    ],
+    commercialRelevance: {
+      ...validBase.commercialRelevance,
+      assessedBy: privateSentinel,
+      founderDecisionNote: privateNoteSentinel,
+    },
+  });
+
+  const report = await runPublishedProblemsInventoryCheck(mem.store, { pageSize: 2 });
+  assert.equal(report.readOnly, true);
+  assert.equal(report.targetConfirmed, true);
+  assert.equal(report.projectId, 'gen-lang-client-0653252950');
+  assert.equal(report.databaseId, 'ai-studio-kopi-6863852d-35ae-4115-97d3-3fcc2fdd6372');
+  assert.equal(report.pagesScanned, 3);
+  assert.equal(report.totalCount, 5);
+  assert.equal(report.eligiblePublicCount, 1);
+  assert.equal(report.reviewRequiredCount, 4);
+
+  const byId = new Map(report.records.map((r) => [r.id, r]));
+  assert.equal(byId.get('doc-a-valid')?.eligiblePublic, true);
+  assert.equal(byId.get('doc-a-valid')?.provenance, 'genuine_research');
+
+  assert.equal(byId.get('doc-b-legacy')?.provenance, 'unknown');
+  assert.equal(byId.get('doc-b-legacy')?.requiresReview, true);
+
+  assert.equal(byId.get('doc-c-synthetic')?.provenance, 'synthetic_test_fixture');
+  assert.equal(byId.get('doc-c-synthetic')?.requiresReview, true);
+
+  assert.equal(byId.get('doc-d-archived')?.publicationStatus, 'archived');
+  assert.equal(byId.get('doc-d-archived')?.requiresReview, true);
+
+  const leakRecord = byId.get('doc-e-nested-leak')!;
+  assert.equal(leakRecord.requiresReview, true);
+  assert.ok(leakRecord.privateFieldPaths.includes('commercialRelevance.assessedBy'));
+  assert.ok(leakRecord.privateFieldPaths.includes('commercialRelevance.founderDecisionNote'));
+
+  const cliOut: string[] = [];
+  const cliErr: string[] = [];
+  const exitCode = await runAdminCli(
+    ['inventory-published', '--page-size', '2'],
+    {
+      initStore: () => ({ store: mem.store, identity: mem.identity }),
+      stdout: (line) => cliOut.push(line),
+      stderr: (line) => cliErr.push(line),
+    }
+  );
+  assert.equal(exitCode, 0);
+  assert.equal(cliErr.length, 0);
+
+  const combinedText = `${JSON.stringify(report)}\n${cliOut.join('\n')}`;
+  assert.equal(combinedText.includes(privateSentinel), false);
+  assert.equal(combinedText.includes(privateNoteSentinel), false);
+  assert.match(combinedText, /eligiblePublic=1, reviewRequired=4/);
+
+  await assert.rejects(
+    () =>
+      runPublishedProblemsInventoryCheck(mem.store, {
+        expectedDatabaseId: 'wrong-db-id',
+      }),
+    /Inventory target mismatch/
+  );
 });

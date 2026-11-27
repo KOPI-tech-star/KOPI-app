@@ -7,7 +7,7 @@ import {
   initializeApp,
   type App,
 } from 'firebase-admin/app';
-import { getFirestore, type Firestore } from 'firebase-admin/firestore';
+import { FieldPath, getFirestore, type Firestore } from 'firebase-admin/firestore';
 import type { FirestoreCollectionName } from '../../src/data/firestoreContracts';
 
 export interface FirebaseAdminTargetConfig {
@@ -36,6 +36,12 @@ export interface AdminDocumentSnapshot {
   readonly id: string;
   readonly updateTimeMs: number | null;
   readonly data: Record<string, unknown> | null;
+}
+
+export interface AdminDocumentPage {
+  readonly docs: readonly AdminDocumentSnapshot[];
+  readonly hasMore: boolean;
+  readonly nextCursor: string | null;
 }
 
 export interface AdminTransactionStore {
@@ -71,6 +77,13 @@ export interface AdminFirestoreStore {
     collection: FirestoreCollectionName,
     options?: { readonly limit?: number }
   ): Promise<readonly AdminDocumentSnapshot[]>;
+  listDocumentsPage(
+    collection: FirestoreCollectionName,
+    options?: {
+      readonly pageSize?: number;
+      readonly startAfterId?: string | null;
+    }
+  ): Promise<AdminDocumentPage>;
   createDocument(
     collection: FirestoreCollectionName,
     documentId: string,
@@ -383,6 +396,47 @@ export function createFirebaseAdminFirestoreStore(
               : null,
         };
       });
+    },
+
+    async listDocumentsPage(collection, options = {}) {
+      const pageSize =
+        typeof options.pageSize === 'number' &&
+        Number.isInteger(options.pageSize) &&
+        options.pageSize > 0
+          ? Math.min(options.pageSize, 500)
+          : 50;
+
+      const baseQuery = db
+        .collection(collection)
+        .orderBy(FieldPath.documentId());
+      const pagedQuery = options.startAfterId
+        ? baseQuery.startAfter(options.startAfterId).limit(pageSize + 1)
+        : baseQuery.limit(pageSize + 1);
+
+      const snap = await pagedQuery.get();
+      const hasMore = snap.docs.length > pageSize;
+      const pageSnaps = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
+      const docs: AdminDocumentSnapshot[] = pageSnaps.map((docSnap) => {
+        const raw = docSnap.data();
+        return {
+          exists: true,
+          id: docSnap.id,
+          updateTimeMs: docSnap.updateTime ? docSnap.updateTime.toMillis() : null,
+          data:
+            raw && typeof raw === 'object' && !Array.isArray(raw)
+              ? (raw as Record<string, unknown>)
+              : null,
+        };
+      });
+
+      const nextCursor =
+        hasMore && docs.length > 0 ? docs[docs.length - 1]!.id : null;
+
+      return {
+        docs,
+        hasMore,
+        nextCursor,
+      };
     },
 
     async createDocument(collection, documentId, data) {

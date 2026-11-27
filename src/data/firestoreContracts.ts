@@ -144,6 +144,8 @@ export type SourceAccessMechanism =
   | 'customer_interview'
   | 'community_submission';
 
+export type ResearchOriginKind = 'genuine_research' | 'synthetic_test_fixture';
+
 /**
  * Logical schema for `dataSources` (internal-only collection).
  * New sources default to `disabled`; metadata completeness alone does not establish legal permission.
@@ -159,6 +161,8 @@ export interface DataSourceDocument {
   readonly attributionRequirements: string;
   readonly retentionRestrictions: string;
   readonly activationStatus: SourceActivationStatus;
+  readonly isSyntheticTestFixture?: boolean;
+  readonly researchOrigin?: ResearchOriginKind;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly schemaVersion: number;
@@ -197,6 +201,8 @@ export interface SourceObservationDocument {
   readonly removalOrRestrictionStatus: ObservationRemovalStatus;
   readonly extractedByAi?: boolean;
   readonly extractionModel?: string | null;
+  readonly isSyntheticTestFixture?: boolean;
+  readonly researchOrigin?: ResearchOriginKind;
   readonly schemaVersion: number;
 }
 
@@ -253,12 +259,15 @@ export interface CommercialRelevanceDimensionAssessment {
   readonly unresolvedQuestion: string | null;
 }
 
-export interface CommercialRelevanceAssessment {
+export interface PublicCommercialRelevanceAssessment {
   readonly assessedAt: string;
-  readonly assessedBy: string;
   readonly overallSummary: string;
-  readonly founderDecisionNote: string | null;
   readonly dimensions: readonly CommercialRelevanceDimensionAssessment[];
+}
+
+export interface CommercialRelevanceAssessment extends PublicCommercialRelevanceAssessment {
+  readonly assessedBy: string;
+  readonly founderDecisionNote: string | null;
 }
 
 export interface ClusterEvidenceSummary {
@@ -303,6 +312,8 @@ export interface ProblemClusterDocument {
   readonly approvedAt?: string | null;
   readonly publishedAt?: string | null;
   readonly founderExceptionReason?: string | null;
+  readonly isSyntheticTestFixture?: boolean;
+  readonly researchOrigin?: ResearchOriginKind;
   readonly archivedAt?: string | null;
   readonly archiveReason?: string | null;
   readonly createdAt: string;
@@ -390,8 +401,9 @@ export interface PublishedProblemDocument {
   readonly unknownsAndRisks: readonly string[];
   readonly insights: readonly ProblemInsight[];
   readonly existingAlternatives: readonly ExistingAlternative[];
-  readonly commercialRelevance?: CommercialRelevanceAssessment | null;
-  readonly founderExceptionNote?: string | null;
+  readonly commercialRelevance?: PublicCommercialRelevanceAssessment | null;
+  readonly publishedUnderFounderException?: boolean;
+  readonly researchOrigin?: 'genuine_research';
   readonly schemaVersion: number;
 }
 

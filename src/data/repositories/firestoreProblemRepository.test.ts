@@ -136,9 +136,7 @@ function buildValidPublishedDoc(id = 'monsoon-drainage-delays') {
     ],
     commercialRelevance: {
       assessedAt: '2026-11-26T07:30:00.000Z',
-      assessedBy: 'founder-review',
       overallSummary: 'Qualitative evidence indicates recurring operational disruption with partial cost signals.',
-      founderDecisionNote: null,
       dimensions: [
         {
           key: 'severity',
@@ -198,7 +196,8 @@ function buildValidPublishedDoc(id = 'monsoon-drainage-delays') {
         },
       ],
     },
-    founderExceptionNote: null,
+    publishedUnderFounderException: false,
+    researchOrigin: 'genuine_research',
     schemaVersion: 1,
   };
 }
@@ -386,6 +385,33 @@ test('Repository combines verified publishedProblems with demoProblems and grace
   assert.equal(pendingFeed.publishedStatus, 'rules_pending');
   assert.equal(pendingFeed.publishedCount, 0);
   assert.equal(pendingFeed.demoCount, 3);
+  assert.equal(pendingFeed.problems.length, 3);
+
+  // If publishedProblems fails due to transient availability/network error while demoProblems load,
+  // combined feed surfaces publishedStatus='unavailable' and keeps all 3 demoProblems visible.
+  const { reader: unavailablePublishedReader } = createSeededMockReader({
+    publishedQueryError: Object.assign(
+      new Error('14 UNAVAILABLE: transient publishedProblems read failure'),
+      { code: 'unavailable' }
+    ),
+  });
+  const unavailableRepo = new FirestoreProblemRepository(unavailablePublishedReader);
+  const unavailableFeed = await unavailableRepo.getCombinedProblemFeed();
+  assert.equal(unavailableFeed.publishedStatus, 'unavailable');
+  assert.equal(unavailableFeed.publishedCount, 0);
+  assert.equal(unavailableFeed.demoCount, 3);
+  assert.equal(unavailableFeed.problems.length, 3);
+  assert.equal(unavailableFeed.demoProblems.length, 3);
+
+  // When 0 eligible published problems exist, combined feed returns publishedStatus='empty'
+  const { reader: emptyPublishedReader } = createSeededMockReader({
+    publishedDocs: [],
+  });
+  const emptyRepo = new FirestoreProblemRepository(emptyPublishedReader);
+  const emptyFeed = await emptyRepo.getCombinedProblemFeed();
+  assert.equal(emptyFeed.publishedStatus, 'empty');
+  assert.equal(emptyFeed.publishedCount, 0);
+  assert.equal(emptyFeed.demoCount, 3);
 });
 
 test('Candidate Security Rules enforce narrow demo + bounded publishedProblems access and deny all 6 internal collections', () => {

@@ -35,8 +35,10 @@ import {
   type EvidenceLinkDocument,
   type ProblemClusterDocument,
   type ProblemPublicationStatus,
+  type PublicCommercialRelevanceAssessment,
   type PublishedProblemDocument,
   type ResearchInsightDocument,
+  type ResearchOriginKind,
   type SavedOpportunityDocument,
   type SavedOpportunitySourceScreen,
   type SourceObservationDocument,
@@ -225,6 +227,51 @@ export function isValidPublicationTransition(
   return VALID_PUBLICATION_TRANSITIONS[from].includes(to);
 }
 
+function readOptionalResearchOriginFields(
+  raw: Record<string, unknown>,
+  errors: string[]
+): {
+  readonly isSyntheticTestFixture?: boolean;
+  readonly researchOrigin?: ResearchOriginKind;
+} {
+  let isSyntheticTestFixture: boolean | undefined;
+  if (raw.isSyntheticTestFixture !== undefined) {
+    if (typeof raw.isSyntheticTestFixture !== 'boolean') {
+      errors.push('Field "isSyntheticTestFixture" must be a boolean.');
+    } else {
+      isSyntheticTestFixture = raw.isSyntheticTestFixture;
+    }
+  }
+
+  let researchOrigin: ResearchOriginKind | undefined;
+  if (raw.researchOrigin !== undefined) {
+    if (
+      raw.researchOrigin !== 'genuine_research' &&
+      raw.researchOrigin !== 'synthetic_test_fixture'
+    ) {
+      errors.push('Invalid "researchOrigin".');
+    } else {
+      researchOrigin = raw.researchOrigin;
+    }
+  }
+
+  if (
+    isSyntheticTestFixture !== undefined &&
+    researchOrigin !== undefined &&
+    ((isSyntheticTestFixture && researchOrigin !== 'synthetic_test_fixture') ||
+      (!isSyntheticTestFixture && researchOrigin !== 'genuine_research'))
+  ) {
+    errors.push(
+      'Conflicting "isSyntheticTestFixture" and "researchOrigin" metadata.'
+    );
+  }
+
+  return {
+    ...(isSyntheticTestFixture !== undefined ? { isSyntheticTestFixture } : {}),
+    ...(researchOrigin !== undefined ? { researchOrigin } : {}),
+  };
+}
+
 /**
  * Runtime validator for `dataSources` records.
  */
@@ -290,6 +337,8 @@ export function validateDataSourceRecord(
     errors.push('Field "schemaVersion" must be a positive integer.');
   }
 
+  const originMeta = readOptionalResearchOriginFields(raw, errors);
+
   if (errors.length > 0) {
     return { ok: false, value: null, errors };
   }
@@ -307,6 +356,7 @@ export function validateDataSourceRecord(
       attributionRequirements: attributionRequirements!,
       retentionRestrictions: retentionRestrictions!,
       activationStatus: activationStatus as DataSourceDocument['activationStatus'],
+      ...originMeta,
       createdAt: createdAt!,
       updatedAt: updatedAt!,
       schemaVersion: raw.schemaVersion as number,
@@ -479,6 +529,8 @@ export function validateSourceObservationRecord(
     errors.push('Field "schemaVersion" must be a positive integer.');
   }
 
+  const originMeta = readOptionalResearchOriginFields(raw, errors);
+
   if (errors.length > 0) {
     return { ok: false, value: null, errors };
   }
@@ -509,6 +561,7 @@ export function validateSourceObservationRecord(
     removalOrRestrictionStatus: removalOrRestrictionStatus as SourceObservationDocument['removalOrRestrictionStatus'],
     ...(extractedByAi !== undefined ? { extractedByAi } : {}),
     ...(extractionModel !== undefined ? { extractionModel } : {}),
+    ...originMeta,
     schemaVersion: raw.schemaVersion as number,
   };
 
@@ -676,6 +729,121 @@ const ALLOWED_RELEVANCE_KEYS: readonly CommercialRelevanceDimensionKey[] = [
   'evidence_strength',
 ];
 
+function validateCommercialRelevanceDimensions(
+  rawDimensions: unknown,
+  errors: string[]
+): CommercialRelevanceDimensionAssessment[] {
+  const dimensions: CommercialRelevanceDimensionAssessment[] = [];
+  if (!Array.isArray(rawDimensions) || rawDimensions.length === 0 || rawDimensions.length > 7) {
+    errors.push('commercialRelevance.dimensions must contain 1 to 7 dimension assessments.');
+    return dimensions;
+  }
+
+  const seenKeys = new Set<string>();
+  for (let i = 0; i < rawDimensions.length; i += 1) {
+    const dim = rawDimensions[i];
+    if (!isPlainObject(dim)) {
+      errors.push(`commercialRelevance.dimensions[${i}] must be an object.`);
+      continue;
+    }
+    if ('score' in dim && dim.score !== null) {
+      errors.push(`commercialRelevance.dimensions[${i}] must not assign a numerical score.`);
+    }
+    const key = dim.key;
+    if (
+      typeof key !== 'string' ||
+      !ALLOWED_RELEVANCE_KEYS.includes(key as CommercialRelevanceDimensionKey)
+    ) {
+      errors.push(`Invalid commercialRelevance dimension key "${String(key)}".`);
+    } else if (seenKeys.has(key)) {
+      errors.push(`Duplicate commercialRelevance dimension key "${key}".`);
+    } else {
+      seenKeys.add(key);
+    }
+
+    const status = dim.status;
+    if (
+      typeof status !== 'string' ||
+      !ALLOWED_RELEVANCE_STATUSES.includes(status as CommercialRelevanceStatus)
+    ) {
+      errors.push(`Invalid commercialRelevance dimension status "${String(status)}".`);
+    }
+
+    const label = readSafeString(dim, 'label', 120, errors);
+    const summary = readSafeString(dim, 'summary', MAX_STRING_LONG, errors);
+    const supportingObservationIds = readSafeStringArray(
+      dim,
+      'supportingObservationIds',
+      { allowEmpty: true, maxItems: 50, maxItemLength: 128 },
+      errors
+    );
+
+    let unresolvedQuestion: string | null = null;
+    if (dim.unresolvedQuestion !== null && dim.unresolvedQuestion !== undefined) {
+      unresolvedQuestion = readSafeString(dim, 'unresolvedQuestion', MAX_STRING_SHORT, errors);
+    }
+
+    if (errors.length === 0) {
+      dimensions.push({
+        key: key as CommercialRelevanceDimensionKey,
+        label: label!,
+        status: status as CommercialRelevanceStatus,
+        summary: summary!,
+        supportingObservationIds: supportingObservationIds!,
+        unresolvedQuestion,
+      });
+    }
+  }
+  return dimensions;
+}
+
+export function validatePublicCommercialRelevanceAssessment(
+  raw: unknown
+): ValidationOutcome<PublicCommercialRelevanceAssessment> {
+  const errors: string[] = [];
+  if (!isPlainObject(raw)) {
+    return { ok: false, value: null, errors: ['commercialRelevance must be an object.'] };
+  }
+  if ('overallScore' in raw || 'score' in raw || 'numericScore' in raw) {
+    errors.push('Qualitative commercialRelevance must not contain numerical score fields.');
+  }
+  for (const forbiddenInternal of [
+    'assessedBy',
+    'founderDecisionNote',
+    'reviewNotes',
+    'reviewedBy',
+    'approvedBy',
+    'founderExceptionReason',
+    'founderExceptionNote',
+  ]) {
+    if (forbiddenInternal in raw && raw[forbiddenInternal] !== undefined) {
+      errors.push(
+        `Public commercialRelevance must not expose internal field "${forbiddenInternal}".`
+      );
+    }
+  }
+
+  const assessedAt = parseValidIsoTimestamp(raw.assessedAt);
+  if (!assessedAt) errors.push('commercialRelevance.assessedAt must be a valid timestamp.');
+
+  const overallSummary = readSafeString(raw, 'overallSummary', MAX_STRING_LONG, errors);
+  const dimensions = validateCommercialRelevanceDimensions(raw.dimensions, errors);
+
+  if (errors.length > 0) {
+    return { ok: false, value: null, errors };
+  }
+
+  return {
+    ok: true,
+    value: {
+      assessedAt: assessedAt!,
+      overallSummary: overallSummary!,
+      dimensions,
+    },
+    errors: [],
+  };
+}
+
 export function validateCommercialRelevanceAssessment(
   raw: unknown
 ): ValidationOutcome<CommercialRelevanceAssessment> {
@@ -698,66 +866,7 @@ export function validateCommercialRelevanceAssessment(
     founderDecisionNote = readSafeString(raw, 'founderDecisionNote', MAX_STRING_LONG, errors);
   }
 
-  const dimensions: CommercialRelevanceDimensionAssessment[] = [];
-  if (!Array.isArray(raw.dimensions) || raw.dimensions.length === 0 || raw.dimensions.length > 7) {
-    errors.push('commercialRelevance.dimensions must contain 1 to 7 dimension assessments.');
-  } else {
-    const seenKeys = new Set<string>();
-    for (let i = 0; i < raw.dimensions.length; i += 1) {
-      const dim = raw.dimensions[i];
-      if (!isPlainObject(dim)) {
-        errors.push(`commercialRelevance.dimensions[${i}] must be an object.`);
-        continue;
-      }
-      if ('score' in dim && dim.score !== null) {
-        errors.push(`commercialRelevance.dimensions[${i}] must not assign a numerical score.`);
-      }
-      const key = dim.key;
-      if (
-        typeof key !== 'string' ||
-        !ALLOWED_RELEVANCE_KEYS.includes(key as CommercialRelevanceDimensionKey)
-      ) {
-        errors.push(`Invalid commercialRelevance dimension key "${String(key)}".`);
-      } else if (seenKeys.has(key)) {
-        errors.push(`Duplicate commercialRelevance dimension key "${key}".`);
-      } else {
-        seenKeys.add(key);
-      }
-
-      const status = dim.status;
-      if (
-        typeof status !== 'string' ||
-        !ALLOWED_RELEVANCE_STATUSES.includes(status as CommercialRelevanceStatus)
-      ) {
-        errors.push(`Invalid commercialRelevance dimension status "${String(status)}".`);
-      }
-
-      const label = readSafeString(dim, 'label', 120, errors);
-      const summary = readSafeString(dim, 'summary', MAX_STRING_LONG, errors);
-      const supportingObservationIds = readSafeStringArray(
-        dim,
-        'supportingObservationIds',
-        { allowEmpty: true, maxItems: 50, maxItemLength: 128 },
-        errors
-      );
-
-      let unresolvedQuestion: string | null = null;
-      if (dim.unresolvedQuestion !== null && dim.unresolvedQuestion !== undefined) {
-        unresolvedQuestion = readSafeString(dim, 'unresolvedQuestion', MAX_STRING_SHORT, errors);
-      }
-
-      if (errors.length === 0) {
-        dimensions.push({
-          key: key as CommercialRelevanceDimensionKey,
-          label: label!,
-          status: status as CommercialRelevanceStatus,
-          summary: summary!,
-          supportingObservationIds: supportingObservationIds!,
-          unresolvedQuestion,
-        });
-      }
-    }
-  }
+  const dimensions = validateCommercialRelevanceDimensions(raw.dimensions, errors);
 
   if (errors.length > 0) {
     return { ok: false, value: null, errors };
@@ -970,6 +1079,8 @@ export function validateProblemClusterRecord(
     }
   }
 
+  const originMeta = readOptionalResearchOriginFields(raw, errors);
+
   if (errors.length > 0) {
     return { ok: false, value: null, errors };
   }
@@ -1003,6 +1114,7 @@ export function validateProblemClusterRecord(
       ...(approvedAt !== undefined ? { approvedAt } : {}),
       ...(publishedAt !== undefined ? { publishedAt } : {}),
       ...(founderExceptionReason !== undefined ? { founderExceptionReason } : {}),
+      ...originMeta,
       ...(archivedAt !== undefined ? { archivedAt } : {}),
       ...(archiveReason !== undefined ? { archiveReason } : {}),
       createdAt: createdAt!,
@@ -1054,10 +1166,27 @@ export function validatePublishedProblemDocument(
   }
 
   // Strip-check internal fields that must never leak to public collection
-  for (const forbiddenField of ['reviewNotes', 'reviewedBy', 'approvedBy', 'internalComments']) {
+  for (const forbiddenField of [
+    'reviewNotes',
+    'reviewedBy',
+    'reviewedAt',
+    'approvedBy',
+    'approvedAt',
+    'internalComments',
+    'founderExceptionReason',
+    'founderExceptionNote',
+    'founderDecisionNote',
+    'assessedBy',
+  ]) {
     if (forbiddenField in raw && raw[forbiddenField] !== undefined) {
       errors.push(`Published problem "${expectedDocId}" contains internal editorial field "${forbiddenField}".`);
     }
+  }
+
+  if (raw.isSyntheticTestFixture === true || raw.researchOrigin === 'synthetic_test_fixture') {
+    errors.push(
+      `Published problem "${expectedDocId}" cannot carry synthetic test fixture origin metadata.`
+    );
   }
 
   if ('opportunityScore' in raw && raw.opportunityScore !== null) {
@@ -1309,12 +1438,12 @@ export function validatePublishedProblemDocument(
     }
   }
 
-  let commercialRelevance: CommercialRelevanceAssessment | null | undefined = undefined;
+  let commercialRelevance: PublicCommercialRelevanceAssessment | null | undefined = undefined;
   if (raw.commercialRelevance !== undefined) {
     if (raw.commercialRelevance === null) {
       commercialRelevance = null;
     } else {
-      const cr = validateCommercialRelevanceAssessment(raw.commercialRelevance);
+      const cr = validatePublicCommercialRelevanceAssessment(raw.commercialRelevance);
       if (!cr.ok || !cr.value) {
         errors.push(...cr.errors);
       } else {
@@ -1323,12 +1452,21 @@ export function validatePublishedProblemDocument(
     }
   }
 
-  let founderExceptionNote: string | null | undefined = undefined;
-  if (raw.founderExceptionNote !== undefined) {
-    if (raw.founderExceptionNote === null) {
-      founderExceptionNote = null;
+  let publishedUnderFounderException: boolean | undefined = undefined;
+  if (raw.publishedUnderFounderException !== undefined) {
+    if (typeof raw.publishedUnderFounderException !== 'boolean') {
+      errors.push('Field "publishedUnderFounderException" must be a boolean.');
     } else {
-      founderExceptionNote = readSafeString(raw, 'founderExceptionNote', MAX_STRING_LONG, errors);
+      publishedUnderFounderException = raw.publishedUnderFounderException;
+    }
+  }
+
+  let researchOrigin: 'genuine_research' | undefined = undefined;
+  if (raw.researchOrigin !== undefined) {
+    if (raw.researchOrigin !== 'genuine_research') {
+      errors.push('Published problem field "researchOrigin" may only be "genuine_research".');
+    } else {
+      researchOrigin = 'genuine_research';
     }
   }
 
@@ -1395,7 +1533,8 @@ export function validatePublishedProblemDocument(
     insights,
     existingAlternatives,
     ...(commercialRelevance !== undefined ? { commercialRelevance } : {}),
-    ...(founderExceptionNote !== undefined ? { founderExceptionNote } : {}),
+    ...(publishedUnderFounderException !== undefined ? { publishedUnderFounderException } : {}),
+    ...(researchOrigin !== undefined ? { researchOrigin } : {}),
     schemaVersion: raw.schemaVersion as number,
   };
 
@@ -1456,7 +1595,7 @@ export function toPublishedProblemDomainModel(
       summary: d.summary,
       unresolvedQuestion: d.unresolvedQuestion,
     })),
-    founderExceptionNote: doc.founderExceptionNote ?? null,
+    publishedUnderFounderException: doc.publishedUnderFounderException === true,
     publishedAt: doc.publishedAt,
   };
 }

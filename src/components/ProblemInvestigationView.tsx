@@ -276,13 +276,15 @@ function renderInvestigationBody(
           </div>
         ) : (
           <div className="mt-3 space-y-4 rounded-xl border border-[#402818]/12 bg-[#FFF9F3] p-5">
-            {problem.founderExceptionNote && (
+            {problem.publishedUnderFounderException && (
               <div
-                data-testid="investigation-founder-exception-note"
+                data-testid="investigation-founder-exception-notice"
                 className="rounded-lg border border-[#C65A1B]/25 bg-[#FAE8D7]/70 px-3.5 py-2.5 font-dm-sans text-[0.8125rem] text-[#7B2D0C]"
               >
-                <strong>Published under founder exception:</strong>{' '}
-                {problem.founderExceptionNote}
+                <strong>Single-source exception disclosure:</strong> This problem
+                was published under a documented founder exception with fewer
+                than two independent sources. Treat early findings cautiously
+                until independent corroboration is added.
               </div>
             )}
 

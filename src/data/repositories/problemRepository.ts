@@ -13,7 +13,7 @@ export type RepositoryErrorCode =
   | 'invalid_id'
   | 'unknown';
 
-export type PublishedFeedStatus = 'loaded' | 'rules_pending' | 'empty';
+export type PublishedFeedStatus = 'loaded' | 'rules_pending' | 'unavailable' | 'empty';
 
 export class RepositoryError extends Error {
   public readonly code: RepositoryErrorCode;

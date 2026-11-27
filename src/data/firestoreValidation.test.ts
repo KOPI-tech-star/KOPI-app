@@ -15,10 +15,12 @@ import {
   isValidPublicationTransition,
   toOpportunityCardItem,
   toProblemDomainModel,
+  toPublishedProblemDomainModel,
   validateDataSourceRecord,
   validateDemoProblemDocument,
   validateFirestoreEvaluationRecord,
   validateProblemClusterRecord,
+  validatePublishedProblemDocument,
   validateResearchInsightRecord,
   validateSourceObservationRecord,
 } from './firestoreValidation';
@@ -308,4 +310,97 @@ test('Collection visibility and anticipated index invariants separate internal f
   assert.equal(FIRESTORE_COLLECTION_VISIBILITY.researchInsights, 'internal_only');
   assert.equal(FIRESTORE_COLLECTION_VISIBILITY.opportunityEvaluations, 'internal_only');
   assert.ok(FIRESTORE_ANTICIPATED_INDEXES.every((idx) => idx.deployedInMilestoneF2 === false));
+});
+
+test('validatePublishedProblemDocument enforces public commercialRelevance separation, neutral founder disclosure, and rejects synthetic provenance', () => {
+  const validPublished = {
+    id: 'clean-water-monitoring',
+    slug: 'clean-water-monitoring',
+    title: 'Small clinics lack continuous cold-chain alerts',
+    summary: 'Verified field reports show rural primary clinics lose vaccines during overnight outages.',
+    categoryLabel: 'Daily Life',
+    categories: ['Daily Life'],
+    affectedAudience: ['Rural clinic pharmacists'],
+    recurrenceNote: 'Documented across verified field inspection logs.',
+    isIllustrativeDemo: false,
+    publishedAt: '2026-11-26T08:00:00.000Z',
+    publicationStatus: 'published',
+    verifiedEvidenceCount: 1,
+    independentEvidenceCount: 1,
+    sourceDiversityCount: 1,
+    sourceCoverage: 1,
+    geographicalCoverage: ['Assam'],
+    lastUpdated: '2026-11-26T08:00:00.000Z',
+    coverageNote: 'Published under a documented founder exception with 1 verified observation(s) across 1 distinct source(s).',
+    evidence: [
+      {
+        id: 'obs-clinic-1',
+        problemId: 'clean-water-monitoring',
+        sourceName: 'Public Health Audit',
+        sourceType: 'research_publication',
+        excerpt: 'Clinics recorded overnight temperature excursions.',
+        externalUrl: 'https://example.org/clinic-1',
+        observedDate: '2026-11-20T09:00:00.000Z',
+        verificationStatus: 'verified',
+      },
+    ],
+    researchLimitations: ['Covers a single district inspection window.'],
+    unknownsAndRisks: ['Maintenance contractor response SLAs remain unverified.'],
+    insights: [],
+    existingAlternatives: [],
+    commercialRelevance: {
+      assessedAt: '2026-11-26T07:30:00.000Z',
+      overallSummary: 'Operational disruption is supported by verified evidence; economic signals require further validation.',
+      dimensions: [
+        {
+          key: 'severity',
+          label: 'Problem Severity',
+          status: 'supported',
+          summary: 'Verified vaccine spoilage risk.',
+          supportingObservationIds: ['obs-clinic-1'],
+          unresolvedQuestion: null,
+        },
+      ],
+    },
+    publishedUnderFounderException: true,
+    researchOrigin: 'genuine_research',
+    schemaVersion: 1,
+  };
+
+  const validRes = validatePublishedProblemDocument('clean-water-monitoring', validPublished);
+  assert.equal(validRes.ok, true, validRes.errors.join('; '));
+  assert.ok(validRes.value);
+  assert.equal(validRes.value.publishedUnderFounderException, true);
+  assert.equal(validRes.value.researchOrigin, 'genuine_research');
+  assert.equal('assessedBy' in (validRes.value.commercialRelevance ?? {}), false);
+  assert.equal('founderDecisionNote' in (validRes.value.commercialRelevance ?? {}), false);
+
+  const domainModel = toPublishedProblemDomainModel(validRes.value);
+  assert.equal(domainModel.publishedUnderFounderException, true);
+
+  // Reject private assessor/notes inside nested commercialRelevance
+  const leakedNested = validatePublishedProblemDocument('clean-water-monitoring', {
+    ...validPublished,
+    commercialRelevance: {
+      ...validPublished.commercialRelevance,
+      assessedBy: 'operator-123',
+      founderDecisionNote: 'Internal launch note',
+    },
+  });
+  assert.equal(leakedNested.ok, false);
+
+  // Reject top-level founderExceptionNote or founderExceptionReason
+  const leakedTop = validatePublishedProblemDocument('clean-water-monitoring', {
+    ...validPublished,
+    founderExceptionReason: 'Private reason',
+  });
+  assert.equal(leakedTop.ok, false);
+
+  // Reject synthetic test fixture provenance on publishedProblems
+  const syntheticPub = validatePublishedProblemDocument('clean-water-monitoring', {
+    ...validPublished,
+    isSyntheticTestFixture: true,
+    researchOrigin: 'synthetic_test_fixture',
+  });
+  assert.equal(syntheticPub.ok, false);
 });

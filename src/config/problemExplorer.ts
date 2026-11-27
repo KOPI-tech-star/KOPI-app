@@ -85,7 +85,7 @@ export interface Problem {
   readonly researchLimitations?: readonly string[];
   readonly commercialRelevanceSummary?: string | null;
   readonly commercialRelevanceDimensions?: readonly QualitativeRelevanceSummaryItem[];
-  readonly founderExceptionNote?: string | null;
+  readonly publishedUnderFounderException?: boolean;
   readonly publishedAt?: string | null;
 }
 
