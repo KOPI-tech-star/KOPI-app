@@ -439,20 +439,34 @@ test('8. Saved opportunities enforce approved IDs, guest-migration safety, serve
   );
 });
 
-test('9. Internal 6 research collections and unknown paths remain strictly inaccessible to authenticated users', async () => {
-  const aliceDb = testEnv
-    .authenticatedContext('alice', { email_verified: true })
-    .firestore();
-
-  for (const colName of [
+test('9. Internal 6 research collections and unknown paths remain strictly inaccessible to anonymous and authenticated users', async () => {
+  const internalCollections = [
     'dataSources',
     'sourceObservations',
     'problemClusters',
     'evidenceLinks',
     'researchInsights',
     'opportunityEvaluations',
-    'unknownPrivateCollection',
-  ]) {
+  ];
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const adminDb = ctx.firestore();
+    for (const colName of internalCollections) {
+      await setDoc(doc(adminDb, `${colName}/sample-doc`), {
+        id: 'sample-doc',
+        collection: colName,
+      });
+    }
+  });
+
+  const anonDb = testEnv.unauthenticatedContext().firestore();
+  const aliceDb = testEnv
+    .authenticatedContext('alice', { email_verified: true })
+    .firestore();
+
+  for (const colName of [...internalCollections, 'unknownPrivateCollection']) {
+    await assertFails(getDoc(doc(anonDb, `${colName}/sample-doc`)));
+    await assertFails(getDocs(collection(anonDb, colName)));
     await assertFails(getDoc(doc(aliceDb, `${colName}/sample-doc`)));
     await assertFails(getDocs(collection(aliceDb, colName)));
     await assertFails(setDoc(doc(aliceDb, `${colName}/sample-doc`), { id: 'sample-doc' }));
@@ -554,8 +568,17 @@ test('10. publishedProblems allows bounded public reads for published docs only,
     )
   );
 
-  // Unbounded, limit > 50, draft, and archived queries MUST fail
+  // Unbounded, filtered with no limit, limit > 50, draft, and archived queries MUST fail
   await assertFails(getDocs(collection(anonDb, 'publishedProblems')));
+  await assertFails(
+    getDocs(
+      query(
+        collection(anonDb, 'publishedProblems'),
+        where('publicationStatus', '==', 'published'),
+        where('isIllustrativeDemo', '==', false)
+      )
+    )
+  );
   await assertFails(
     getDocs(
       query(
@@ -605,6 +628,22 @@ test('10. publishedProblems allows bounded public reads for published docs only,
 
   // Authenticated onboarded user can bookmark a published problem, but NOT an archived/nonexistent one
   await assertSucceeds(setDoc(doc(aliceDb, 'users/alice'), validUserPayload('alice')));
+
+  // Neither anonymous nor onboarded email-verified clients can create a valid published record at a fresh ID
+  const validFreshPublishedPayload = {
+    id: 'client-forged-problem',
+    slug: 'client-forged-problem',
+    title: 'Client forged published problem',
+    publicationStatus: 'published',
+    isIllustrativeDemo: false,
+  };
+  await assertFails(
+    setDoc(doc(anonDb, 'publishedProblems/client-forged-problem'), validFreshPublishedPayload)
+  );
+  await assertFails(
+    setDoc(doc(aliceDb, 'publishedProblems/client-forged-problem'), validFreshPublishedPayload)
+  );
+
   await assertSucceeds(
     setDoc(
       doc(aliceDb, 'users/alice/savedOpportunities/monsoon-drainage-delays'),
